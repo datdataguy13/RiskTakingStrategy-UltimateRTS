@@ -1,0 +1,13 @@
+{
+  "name": "risk-taking-strategy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Browser real-time strategy game with a dependency-free multiplayer server",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/sim-test.js && node test/team-test.js && node test/replay-test.js && node test/strike-test.js && node test/net-test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

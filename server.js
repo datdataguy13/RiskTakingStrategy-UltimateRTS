@@ -1,15 +1,19 @@
 // Risk Taking Strategy — game server. No dependencies: `node server.js`, then open http://localhost:8080
+// Set PORT to use another port; web hosts such as Render and Fly.io set it for you.
 //
 // Does two things:
 //  1. Serves the game files.
 //  2. Runs multiplayer rooms over WebSocket (/ws). The server does not simulate the game.
-//     It is the clock: every TURN_MS it sends both players the commands it received,
+//     It is the clock: every TURN_MS it sends every player the commands it received,
 //     and each player's browser advances its own copy of the (deterministic) simulation.
+//     Computer players are simulated in the browsers too, identically on each.
 'use strict';
 const http = require('http'), fs = require('fs'), path = require('path'), crypto = require('crypto');
 
 require('./js/data.js');   // shared game data: faction and map-theme ids
 const ROOT = __dirname, MAX_MSG = 64 * 1024;
+const MAX_CLIENTS = 200;      // plenty for friends; stops a public server being flooded with connections
+const PING_MS = 25000;        // hosting proxies close WebSockets that sit silent, e.g. a host waiting in the lobby
 let TURN_MS = 100;
 const FACTIONS = globalThis.RTS.FACTION_ORDER, THEMES = globalThis.RTS.THEME_ORDER;
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
@@ -29,13 +33,15 @@ function serve(req, res) {
 }
 
 // ---------- minimal WebSocket (RFC 6455, text frames) ----------
+const clients = new Set();
 function accept(req, socket) {
   const key = req.headers['sec-websocket-key'];
-  if (!key || req.url.split('?')[0] !== '/ws') return socket.destroy();
+  if (!key || req.url.split('?')[0] !== '/ws' || clients.size >= MAX_CLIENTS) return socket.destroy();
   const hash = crypto.createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
   socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + hash + '\r\n\r\n');
   socket.setNoDelay(true);
   const c = { socket, room: null, idx: -1, faction: 'liberty', alive: true, buf: Buffer.alloc(0), frag: '' };
+  clients.add(c);
   socket.on('data', d => { c.buf = Buffer.concat([c.buf, d]); try { parse(c); } catch (e) { drop(c); } });
   socket.on('close', () => drop(c));
   socket.on('error', () => drop(c));
@@ -71,35 +77,106 @@ function frame(c, payload, op) {
 const send = (c, o) => frame(c, Buffer.from(JSON.stringify(o)), 1);
 
 // ---------- rooms ----------
+// A room has up to MAX_PLAYERS slots, each a human connection or a computer player.
+// Slot order is the player order in the simulation. Once a match starts the server keeps
+// every command it has released (room.log), so a player who drops can come back and catch up.
 const rooms = new Map();
+const MAX_PLAYERS = globalThis.RTS.MAX_PLAYERS, DIFFS = ['easy', 'normal', 'hard'];
+let GRACE_MS = 60000;          // how long a dropped player has to reconnect before they forfeit
 function code() {
   const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
   for (;;) { let s = ''; for (let i = 0; i < 4; i++) s += A[crypto.randomInt(A.length)]; if (!rooms.has(s)) return s; }
 }
+const clean = (t, max) => String(t == null ? '' : t).replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max);
+const humans = room => room.slots.filter(s => s.c);
+const idxOf = c => c.room ? c.room.slots.findIndex(s => s.c === c) : -1;
+function freeTeam(room) { for (let t = 0; t < MAX_PLAYERS; t++) if (!room.slots.some(s => s.team === t)) return t; return 0; }
+function nameFor(room, want) {
+  let n = clean(want, 16) || 'Player', k = 2;
+  const base = n;
+  while (room.slots.some(s => s.name === n)) n = base.slice(0, 14) + ' ' + k++;
+  return n;
+}
 function lobby(room) {
-  room.players.forEach((p, i) => send(p, { t: 'room', code: room.code, you: i, theme: room.theme, players: room.players.map(q => ({ faction: q.faction })) }));
+  const slots = room.slots.map(s => ({ ai: s.ai || null, name: s.name, faction: s.faction, team: s.team }));
+  const hostSlot = room.slots.findIndex(s => s.c === room.host);
+  room.slots.forEach((s, i) => { if (s.c) send(s.c, { t: 'room', code: room.code, you: i, hostSlot, theme: room.theme, slots }); });
+}
+function toRoom(room, o) { for (const s of room.slots) if (s.c) send(s.c, o); }
+function closeRoom(room) {
+  clearInterval(room.timer);
+  for (const s of room.slots) { clearTimeout(s.grace); if (s.c) s.c.room = null; }
+  rooms.delete(room.code);
+}
+function clock(room) {
+  clearInterval(room.timer); room.timer = null;
+  if (!room.started || room.slots.some(s => s.away)) return;       // the match waits for dropped players
+  room.timer = setInterval(() => {
+    const msg = { t: 'turn', n: ++room.turn, c: room.cmds };
+    if (room.cmds.length) room.log.push([room.turn, room.cmds]);
+    room.cmds = [];
+    toRoom(room, msg);
+  }, TURN_MS);
+}
+// A player is out of the match for good: their side surrenders, on every copy of the game at once.
+function forfeit(room, i) {
+  const s = room.slots[i];
+  clearTimeout(s.grace); s.away = false; s.gone = true; s.c = null;
+  if (!room.slots.some(x => x.c)) return closeRoom(room);
+  room.cmds.push({ type: 'surrender', player: i });
+  toRoom(room, { t: 'gone', player: i });
+  clock(room);
+}
+// Back to the lobby with the same people, ready for a rematch.
+function endMatch(room) {
+  clearInterval(room.timer); room.timer = null;
+  for (const s of room.slots) clearTimeout(s.grace);
+  room.slots = room.slots.filter(s => s.ai || s.c);
+  for (const s of room.slots) { s.away = false; s.gone = false; }
+  room.started = false; room.turn = 0; room.cmds = []; room.log = []; room.hashes = new Map(); room.startMsg = null;
+  if (!room.slots.some(s => s.c)) return closeRoom(room);
+  if (!room.slots.some(s => s.c === room.host)) room.host = humans(room)[0].c;
+  lobby(room);
 }
 function drop(c) {
   if (!c.alive) return;
   c.alive = false;
+  clients.delete(c);
   try { c.socket.destroy(); } catch (e) { /* gone */ }
-  const room = c.room;
-  if (!room) return;
-  room.players = room.players.filter(p => p !== c);
-  if (!room.players.length || room.started) {
-    for (const p of room.players) send(p, { t: 'left' });
-    clearInterval(room.timer); rooms.delete(room.code);
-    for (const p of room.players) p.room = null;
-  } else lobby(room);
+  leave(c, false);
+}
+// left = the player chose to leave (no way back); otherwise the connection dropped
+function leave(c, left) {
+  const room = c.room, i = idxOf(c);
+  c.room = null;
+  if (!room || i < 0) return;
+  const s = room.slots[i];
+  if (room.started) {
+    if (left) return forfeit(room, i);
+    s.c = null; s.away = true;
+    if (!room.slots.some(x => x.c)) {                              // nobody left to wait: keep the room briefly in case they return
+      clearInterval(room.timer); room.timer = null;
+      s.grace = setTimeout(() => { if (!room.slots.some(x => x.c)) closeRoom(room); else forfeit(room, i); }, GRACE_MS);
+      return;
+    }
+    clock(room);
+    toRoom(room, { t: 'away', player: i, secs: Math.round(GRACE_MS / 1000) });
+    s.grace = setTimeout(() => forfeit(room, i), GRACE_MS);
+    return;
+  }
+  room.slots.splice(i, 1);
+  if (!room.slots.some(x => x.c)) return closeRoom(room);
+  if (room.host === c) room.host = humans(room)[0].c;
+  lobby(room);
 }
 function handle(c, m) {
-  const room = c.room;
+  const room = c.room, me = idxOf(c);
   switch (m.t) {
     case 'host': {
       if (room) return;
-      const r = { code: code(), players: [c], theme: 'grass', started: false, timer: null, turn: 0, cmds: [], hashes: new Map() };
-      if (FACTIONS.includes(m.faction)) c.faction = m.faction;
+      const r = { code: code(), slots: [], host: c, theme: 'grass', started: false, timer: null, turn: 0, cmds: [], log: [], hashes: new Map(), startMsg: null };
       if (THEMES.includes(m.theme)) r.theme = m.theme;
+      r.slots.push({ c, name: nameFor(r, m.name), faction: FACTIONS.includes(m.faction) ? m.faction : 'liberty', team: 0 });
       rooms.set(r.code, r); c.room = r; lobby(r);
       break;
     }
@@ -107,51 +184,113 @@ function handle(c, m) {
       if (room) return;
       const r = rooms.get(String(m.code || '').toUpperCase().trim());
       if (!r) return send(c, { t: 'error', msg: 'No game found with that code' });
-      if (r.started || r.players.length >= 2) return send(c, { t: 'error', msg: 'That game is full or already started' });
-      if (FACTIONS.includes(m.faction)) c.faction = m.faction;
-      r.players.push(c); c.room = r; lobby(r);
+      if (r.started) return send(c, { t: 'error', msg: 'That game has already started' });
+      if (r.slots.length >= MAX_PLAYERS) return send(c, { t: 'error', msg: 'That game is full' });
+      r.slots.push({ c, name: nameFor(r, m.name), faction: FACTIONS.includes(m.faction) ? m.faction : 'liberty', team: freeTeam(r) });
+      c.room = r; lobby(r);
       break;
     }
-    case 'set':
+    case 'rejoin': {                                               // a dropped player returning to a running match
+      if (room) return;
+      const r = rooms.get(String(m.code || '').toUpperCase().trim());
+      const i = r && r.started ? r.slots.findIndex(s => s.key && s.key === m.key && !s.c && !s.gone) : -1;
+      if (i < 0) return send(c, { t: 'error', msg: 'That game is no longer running', rejoin: true });
+      const s = r.slots[i], from = Number.isInteger(m.from) && m.from >= 0 ? m.from : 0;
+      clearTimeout(s.grace); s.c = c; s.away = false; c.room = r;
+      send(c, { t: 'resume', start: Object.assign({}, r.startMsg, { you: i, key: s.key }), turns: r.log.filter(e => e[0] > from), from, to: r.turn });
+      for (const x of r.slots) if (x.c && x.c !== c) send(x.c, { t: 'back', player: i });
+      for (const x of r.slots) if (x.away) send(c, { t: 'away', player: r.slots.indexOf(x), secs: Math.round(GRACE_MS / 1000) });
+      clock(r);
+      break;
+    }
+    case 'set': {                                                  // your own slot; the host also picks the map
       if (!room || room.started) return;
-      if (FACTIONS.includes(m.faction)) c.faction = m.faction;
-      if (THEMES.includes(m.theme) && room.players[0] === c) room.theme = m.theme;
+      const s = room.slots[me];
+      if (FACTIONS.includes(m.faction)) s.faction = m.faction;
+      if (Number.isInteger(m.team) && m.team >= 0 && m.team < MAX_PLAYERS) s.team = m.team;
+      if (THEMES.includes(m.theme) && room.host === c) room.theme = m.theme;
       lobby(room);
       break;
+    }
+    case 'ai': {                                                   // host only: add, change or remove a computer player
+      if (!room || room.started || room.host !== c) return;
+      if (m.op === 'add') {
+        if (room.slots.length >= MAX_PLAYERS) return;
+        const n = room.slots.filter(s => s.ai).length + 1;
+        room.slots.push({ ai: DIFFS.includes(m.difficulty) ? m.difficulty : 'normal', name: nameFor(room, 'Computer ' + n),
+          faction: FACTIONS[crypto.randomInt(FACTIONS.length)], team: freeTeam(room) });
+      } else {
+        const s = room.slots[m.slot];
+        if (!s || !s.ai) return;
+        if (m.op === 'remove') room.slots.splice(m.slot, 1);
+        else {
+          if (FACTIONS.includes(m.faction)) s.faction = m.faction;
+          if (DIFFS.includes(m.difficulty)) s.ai = m.difficulty;
+          if (Number.isInteger(m.team) && m.team >= 0 && m.team < MAX_PLAYERS) s.team = m.team;
+        }
+      }
+      lobby(room);
+      break;
+    }
     case 'start': {
-      if (!room || room.started || room.players[0] !== c || room.players.length !== 2) return;
-      room.started = true;
-      const seed = crypto.randomInt(1, 2 ** 30);
-      room.players.forEach((p, i) => { p.idx = i; send(p, { t: 'start', seed, theme: room.theme, you: i, factions: room.players.map(q => q.faction) }); });
-      room.timer = setInterval(() => {
-        const msg = { t: 'turn', n: ++room.turn, c: room.cmds };
-        room.cmds = [];
-        for (const p of room.players) send(p, msg);
-      }, TURN_MS);
+      if (!room || room.started || room.host !== c) return;
+      if (room.slots.length < 2 || new Set(room.slots.map(s => s.team)).size < 2) return send(c, { t: 'error', msg: 'You need at least two teams to start' });
+      room.started = true; room.turn = 0; room.cmds = []; room.log = []; room.hashes = new Map(); room.desynced = false;
+      room.startMsg = { t: 'start', code: room.code, match: room.matchNo = (room.matchNo || 0) + 1, seed: crypto.randomInt(1, 2 ** 30), theme: room.theme,
+        players: room.slots.map(s => ({ faction: s.faction, team: s.team, ai: s.ai || null, name: s.name })) };
+      room.slots.forEach((s, i) => {
+        s.away = false; s.gone = false;
+        if (s.c) { s.key = crypto.randomBytes(12).toString('hex'); send(s.c, Object.assign({}, room.startMsg, { you: i, key: s.key })); }
+      });
+      clock(room);
       break;
     }
     case 'cmd':
       if (!room || !room.started || !m.c || typeof m.c !== 'object' || typeof m.c.type !== 'string' || room.cmds.length >= 200) return;
-      m.c.player = c.idx;            // the server decides who issued it
+      if (m.c.type === 'surrender') return;    // leaving is how you surrender
+      m.c.player = me;                         // the server decides who issued it
       room.cmds.push(m.c);
       break;
     case 'hash': {
       if (!room || !room.started || !Number.isInteger(m.n)) return;
       const seen = room.hashes.get(m.n);
       if (seen === undefined) { room.hashes.set(m.n, m.h); if (room.hashes.size > 50) room.hashes.delete(room.hashes.keys().next().value); }
-      else { room.hashes.delete(m.n); if (seen !== m.h) for (const p of room.players) send(p, { t: 'desync', n: m.n }); }
+      else if (seen !== m.h && !room.desynced) { room.desynced = true; toRoom(room, { t: 'desync', n: m.n }); }
       break;
     }
-    case 'over':
-      if (room && room.started) clearInterval(room.timer);
+    case 'chat': {                                                 // not part of the simulation: just relayed
+      const text = clean(m.text, 200), now = Date.now();
+      if (!room || !text || now - (c.lastChat || 0) < 300) return;
+      c.lastChat = now;
+      const from = room.slots[me];
+      for (const s of room.slots) if (s.c && (!m.team || s.team === from.team)) send(s.c, { t: 'chat', from: me, name: from.name, text, team: !!m.team });
+      break;
+    }
+    case 'ping': {                                                 // map ping, shown to your own team
+      const now = Date.now();
+      if (!room || !room.started || !Number.isFinite(m.x) || !Number.isFinite(m.y) || now - (c.lastPing || 0) < 400) return;
+      c.lastPing = now;
+      const from = room.slots[me];
+      for (const s of room.slots) if (s.c && s.team === from.team) send(s.c, { t: 'ping', from: me, name: from.name, x: m.x, y: m.y });
+      break;
+    }
+    case 'over':     // tagged with the match number, so a slow client's late report cannot end the rematch
+      if (room && room.started && m.match === room.matchNo) endMatch(room);
+      break;
+    case 'leave':
+      leave(c, true);
       break;
   }
 }
 
-function start(port, quiet, turnMs) {
+function start(port, quiet, turnMs, graceMs) {
   if (turnMs) TURN_MS = turnMs;
+  if (graceMs) GRACE_MS = graceMs;
   const server = http.createServer(serve);
   server.on('upgrade', accept);
+  const keepalive = setInterval(() => { for (const c of clients) frame(c, Buffer.alloc(0), 9); }, PING_MS);
+  keepalive.unref();
+  server.on('close', () => clearInterval(keepalive));
   return new Promise(resolve => server.listen(port, () => {
     if (!quiet) {
       console.log(`Risk Taking Strategy server running.\n  This computer:   http://localhost:${server.address().port}`);

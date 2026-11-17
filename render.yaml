@@ -1,0 +1,10 @@
+# Render blueprint: one free web service that serves the game and runs multiplayer rooms.
+# Keep it at a single instance: rooms live in the server's memory.
+services:
+  - type: web
+    name: risk-taking-strategy
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /

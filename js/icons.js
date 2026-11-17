@@ -82,6 +82,12 @@
     hj(g) { at(g, 31, 41, -0.1, () => {        // fat sealed launch tube on a shoulder rest
       rect(g, -22, -5.5, 46, 11, '#6a7f72'); rect(g, -22, -5.5, 5, 11, '#d8262c'); rect(g, 19, -5.5, 5, 11, '#d8262c');
       rect(g, -4, 5.5, 9, 8, '#2a2e34'); circ(g, 2.5, 9.5, 2.2, '#f7d038'); }); },
+    sniper(g) { at(g, 30, 50, -0.22, () => {     // long scoped rifle with a bipod
+      rect(g, -27, -2.6, 12, 5.2, '#4d5a38'); rect(g, -15, -2.4, 24, 4.8, '#2a2e34'); rect(g, 9, -1.1, 25, 2.2, '#1a1c20'); rect(g, 31, -1.9, 4, 3.8, '#1a1c20');
+      rect(g, -9, -7.5, 17, 4, '#1a1c20'); circ(g, 8.5, -5.5, 2.2, '#7fd0ff'); line(g, 20, 1, 17, 9, 1.4); line(g, 20, 1, 24, 9, 1.4); }); },
+    mortar(g) { at(g, 40, 58, -1.05, () => {     // tube on a base plate, shell going in
+      rect(g, -4, -3.5, 30, 7, '#3a3e44'); rect(g, 24, -4.5, 4, 9, '#22262b'); rect(g, -8, -7, 5, 14, '#22262b');
+      poly(g, [[31, -2.6], [38, -2.6], [42, 0], [38, 2.6], [31, 2.6]], '#55733c'); }); line(g, 44, 46, 53, 60, 1.6); },
     shovel(g) { at(g, 47, 54, 0.45, () => { rect(g, -1.8, -12, 3.6, 22, '#96602c'); poly(g, [[-6, -12], [6, -12], [6, -19], [0, -25], [-6, -19]], '#aeb5bd'); }); },
     wrench(g) { at(g, 47, 53, 0.55, () => {
       rect(g, -2.3, -15, 4.6, 24, '#c3c9d1'); g.beginPath(); g.arc(0, -18, 6.5, 2.3, 7.1); g.lineTo(0, -17); g.closePath(); fin(g, '#c3c9d1'); }); },
@@ -198,6 +204,21 @@
       line(g, 59, 23, 59, 45, 2.6, 'rgba(20,22,26,.55)'); circ(g, 58, 34, 2.2, '#22262b'); star(g, 20, 32.5, 2.8, '#e02a2a'); line(g, 40, 40, 38, 46, 1.4); wheel(g, 38, 47, 3);
       for (const [x, y] of [[14, 50], [27, 54]]) { g.beginPath(); g.moveTo(x - 5, y - 3); g.quadraticCurveTo(x, y - 11, x + 5, y - 3); g.closePath(); fin(g, '#e9ecef'); line(g, x - 4.5, y - 3, x, y + 3, 0.8); line(g, x + 4.5, y - 3, x, y + 3, 0.8); circ(g, x, y + 4, 1.6, c.uniform); }
     },
+    gatling(g, c) {              // light tank with twin rotary cannons
+      track(g, 6, 54, 45, 56, 6);
+      poly(g, [[4, 45], [8, 38], [50, 38], [57, 42], [55, 45]], c.body);
+      poly(g, [[14, 38], [16, 28], [34, 28], [38, 38]], c.lite);
+      for (const y of [29.5, 34.5]) { rect(g, 34, y - 1.8, 24, 3.6, '#22262b'); for (let k = 0; k < 4; k++) line(g, 40 + k * 4.5, y - 1.8, 40 + k * 4.5, y + 1.8, 1, '#5d636b'); rect(g, 56, y - 2.4, 3.5, 4.8, '#5d636b'); }
+      rect(g, 18, 24, 8, 4, c.dark); star(g, 26, 33.5, 2.8, '#f7d038'); rect(g, 10, 40, 10, 3, c.team, false);
+    },
+    gunship(g, c) {              // attack helicopter with rocket pods and a chin gun
+      g.fillStyle = 'rgba(255,255,255,.06)'; for (const y of [50, 56]) g.fillRect(0, y, 64, 1.5);
+      g.beginPath(); g.moveTo(3, 29); g.lineTo(24, 30); g.lineTo(29, 24); g.lineTo(46, 24); g.quadraticCurveTo(61, 29, 59, 37); g.lineTo(30, 40); g.lineTo(24, 34); g.lineTo(3, 32); g.closePath(); fin(g, c.body);
+      poly(g, [[3, 32], [1, 20], [6, 20], [10, 29]], c.team); poly(g, [[40, 26], [48, 26], [55, 31], [44, 31]], '#8fd0f5'); poly(g, [[47, 31], [57, 33], [57, 36], [47, 35]], '#8fd0f5');
+      rect(g, 24, 37, 18, 2.5, c.dark); for (const x of [25, 34]) { rect(g, x, 39.5, 8, 4.5, '#2a2e34'); for (let k = 0; k < 3; k++) circ(g, x + 8, 40.6 + k * 1.4, 0.7, '#d03a2a', false); }
+      rect(g, 50, 39, 11, 2, '#22262b'); circ(g, 50, 40, 2.2, '#22262b');
+      line(g, 37, 24, 37, 19, 2.2); line(g, 10, 18.5, 62, 18.5, 2.4); line(g, 3, 26, 3, 16, 1.6); star(g, 18, 31, 2.6, c.team);
+    },
     drone(g, c) {                // long-winged armed drone, seen from the side in flight
       g.beginPath(); g.moveTo(8, 32); g.quadraticCurveTo(30, 27, 46, 27); g.quadraticCurveTo(58, 24, 61, 30); g.quadraticCurveTo(58, 35, 46, 35); g.lineTo(10, 35); g.closePath(); fin(g, '#c9ced4');
       poly(g, [[10, 33], [3, 21], [7, 21], [15, 31]], c.team); poly(g, [[10, 34], [4, 43], [8, 43], [15, 35]], c.team);
@@ -226,6 +247,7 @@
       rifle: ['man', { hat: 'modern', vest: '#7d7152' }, 'm4'],
       rocket: ['man', { hat: 'modern', vest: '#7d7152' }, 'javelin'],
       buggy: ['jeep'], drone: ['drone'], transport: ['heli', { tilt: 1 }],
+      sniper: ['man', { hat: 'modern', vest: '#4d5a38' }, 'sniper'],
       tank: ['tank', { turret: 'wedge', skirt: 1, bx: 47, by: 31, len: 16 }],
       artillery: ['spg', { turret: 1, rack: 1, ang: 0.3, len: 27 }]
     },
@@ -233,7 +255,7 @@
       worker: ['man', { hat: 'ushanka', uniform: '#4f5f78' }, 'hammer'],
       rifle: ['man', { hat: 'steel' }, 'ak'],
       rocket: ['man', { hat: 'steel' }, 'rpg'],
-      buggy: ['btr'], juggernaut: ['juggernaut'], transport: ['heli', {}],
+      buggy: ['btr'], juggernaut: ['juggernaut'], transport: ['heli', {}], gunship: ['gunship'],
       tank: ['tank', { turret: 'dome', skirt: 1, bx: 43, by: 31.5, len: 20 }],
       artillery: ['spg', { turret: 1, brake: 1, ang: 0.42, len: 28 }]
     },
@@ -241,7 +263,7 @@
       worker: ['man', { hat: 'hardhat', hatCol: '#e9edf0', vest: '#d8e23a' }, 'shovel'],
       rifle: ['man', { hat: 'digital', vest: '#56675f' }, 'bullpup'],
       rocket: ['man', { hat: 'digital', vest: '#56675f' }, 'hj'],
-      buggy: ['sixwheel'], flame: ['flame'], transport: ['heli', { tandem: 1 }],
+      buggy: ['sixwheel'], flame: ['flame'], transport: ['heli', { tandem: 1 }], gatling: ['gatling'],
       tank: ['tank', { turret: 'arrow', skirt: 1, bx: 44, by: 32, len: 18 }],
       artillery: ['spg', { turret: 1, brake: 1, rack: 1, ang: 0.52, len: 30 }]
     },
@@ -250,6 +272,7 @@
       rifle: ['pair', { hat: 'cap' }, 'ak'],
       rocket: ['man', { hat: 'cap', sash: '#6b4a2a' }, 'rpg'],
       buggy: ['technical'], barrage: ['barrage'], transport: ['biplane'],
+      mortar: ['man', { hat: 'cap', sash: '#6b4a2a' }, 'mortar'],
       tank: ['tank', { turret: 'small', drums: 1, bx: 38, by: 32, len: 16 }],
       artillery: ['spg', { ang: 0.4, len: 42 }]
     }
@@ -271,7 +294,7 @@
         g.save(); g.translate(11, 0); soldier(g, c, sp[1]); g.translate(-6, 0); WEAPON[sp[2]](g); g.restore();
       } else { soldier(g, c, sp[1]); WEAPON[sp[2]](g); }
     } else {
-      if (type !== 'drone' && type !== 'transport') { g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(0, 55, 64, 9); g.fillStyle = 'rgba(255,255,255,.07)'; g.fillRect(0, 55, 64, 1); }
+      if (type !== 'drone' && type !== 'transport' && type !== 'gunship') { g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(0, 55, 64, 9); g.fillStyle = 'rgba(255,255,255,.07)'; g.fillRect(0, 55, 64, 1); }
       if (kind === 'tank') tank(g, c, sp[1]); else if (kind === 'spg') spg(g, c, sp[1]); else if (kind === 'juggernaut') juggernaut(g, c); else VEH[kind](g, c, sp[1]);
     }
     g.restore();

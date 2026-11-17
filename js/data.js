@@ -56,7 +56,20 @@
     flame: { name: 'Fire Dragon', key: 'u', cash: 300, oil: 110, supply: 3, hp: 480, speed: 2.6, armor: 'heavy',
       dmg: 20, dtype: 'explosive', splash: 1.2, range: 4, cd: 0.5, sight: 7, time: 20, r: 0.45, look: 'flame',
       from: 'factory', req: 'techlab', veh: 1, faction: 'dragon',
-      desc: 'Flamethrower tank. Short range, but burns through infantry and buildings in a wide arc.' }
+      desc: 'Flamethrower tank. Short range, but burns through infantry and buildings in a wide arc.' },
+    // --- second faction elites ---
+    sniper: { name: 'Sniper Team', key: 'n', cash: 200, oil: 0, supply: 2, hp: 70, speed: 1.9, armor: 'inf',
+      dmg: 70, dtype: 'bullet', range: 8, cd: 3.2, sight: 10, time: 14, r: 0.28, from: 'barracks', req: 'techlab', faction: 'liberty',
+      desc: 'Long-range marksmen. Pick off infantry from beyond their reach; useless against armor.' },
+    gunship: { name: 'Hind Gunship', key: 'g', cash: 380, oil: 140, supply: 4, hp: 380, speed: 3.6, armor: 'light',
+      dmg: 18, dtype: 'shell', range: 5.5, cd: 0.6, sight: 9, time: 24, r: 0.5, from: 'airfield', req: 'techlab', veh: 1, air: 1, faction: 'bear',
+      desc: 'Armored attack helicopter. Flies over any terrain and chews through vehicles with its autocannon.' },
+    mortar: { name: 'Mortar Team', key: 'n', cash: 150, oil: 20, supply: 2, hp: 75, speed: 1.8, armor: 'inf',
+      dmg: 34, dtype: 'explosive', splash: 1.1, range: 8, cd: 3.0, sight: 7, time: 13, r: 0.28, from: 'barracks', req: 'techlab', faction: 'vanguard',
+      desc: 'Cheap infantry artillery. Lobs splash-damage shells over the front line.' },
+    gatling: { name: 'Gatling Tank', key: 'g', cash: 240, oil: 70, supply: 3, hp: 330, speed: 3.0, armor: 'light',
+      dmg: 7, dtype: 'bullet', range: 5, cd: 0.15, sight: 8, time: 16, r: 0.42, from: 'factory', req: 'techlab', veh: 1, faction: 'dragon',
+      desc: 'Twin rotary cannons. Mows down infantry and light vehicles; bounces off heavy armor.' }
   };
 
   const BUILDINGS = {
@@ -76,7 +89,9 @@
       desc: 'Builds transport aircraft that airlift and paradrop infantry.' },
     turret: { name: 'Gun Turret', key: 'g', cash: 150, oil: 0, hp: 500, time: 12, w: 1, h: 1, sight: 8, req: 'barracks',
       dmg: 18, dtype: 'shell', range: 6.5, cd: 0.7,
-      desc: 'Base defense. Engages anything in range, including drones.' }
+      desc: 'Base defense. Engages anything in range, including drones.' },
+    silo: { name: 'Superweapon', key: 'n', cash: 1500, oil: 600, hp: 1200, time: 60, w: 3, h: 3, sight: 6, req: 'techlab', charge: 240,
+      desc: 'Charges for four minutes, then strikes anywhere on the map. Everyone is warned when it is built and when it fires. One per commander.' }
   };
 
   const round5 = v => Math.round(v / 5) * 5;
@@ -85,13 +100,17 @@
   // hull: vehicle/building camo colour. emblem: insignia drawn on HQs and in the menu.
   R.FACTIONS = {
     liberty: {
-      name: 'Liberty Command', short: 'Liberty', color: '#3f8cff', alt: '#39c5cf', hull: '#b3a274', emblem: 'star', unique: 'drone',
+      name: 'Liberty Command', short: 'Liberty', color: '#3f8cff', alt: '#39c5cf', hull: '#b3a274', emblem: 'star', unique: 'drone', unique2: 'sniper',
       voice: { pitch: 1.0, rate: 1.15, select: ['Ready.', 'Standing by.', 'Go ahead, command.', 'Awaiting orders.'], move: ['Roger that.', 'Moving out.', 'Copy.', 'On the move.'], attack: ['Weapons free.', 'Engaging.', 'Target acquired.', 'Light them up.'] },
       tagline: 'Precision weapons. Advanced tech. Air power.',
-      perks: ['+15% weapon range on all units', 'Body armor: units have +5% HP', 'Derricks pump 30% more oil', 'Elite: Reaper Drone flies over any terrain', 'Units cost 10% more'],
+      perks: ['+15% weapon range on all units', 'Body armor: units have +5% HP', 'Derricks pump 30% more oil', 'Elites: Reaper Drone and Sniper Team', 'Superweapon: Orbital Lance, one pinpoint blast', 'Units cost 10% more'],
+      // strike: n blasts of dmg within radius, scattered over spread tiles, one every gap ticks
+      strike: { name: 'Orbital Lance', n: 1, radius: 3, dmg: 900, dtype: 'explosive', spread: 0, gap: 1, look: 'beam' },
+      doctrine: { name: 'Satellite Uplink', desc: 'Everything you own sees 2 tiles farther, and Guard Towers gain 1.5 range.',
+        apply(d) { for (const u of Object.values(d.units)) u.sight += 2; for (const b of Object.values(d.buildings)) b.sight += 2; d.buildings.turret.range += 1.5; } },
       names: { worker: 'Engineer', rifle: 'Marine', rocket: 'Javelin Team', buggy: 'Recon Jeep', tank: 'Liberator MBT', artillery: 'Paladin Howitzer',
         transport: 'Osprey Tiltrotor', airfield: 'Airbase',
-        hq: 'Forward HQ', farm: 'Supply Depot', barracks: 'Barracks', factory: 'Motor Pool', techlab: 'R&D Lab', turret: 'Guard Tower' },
+        hq: 'Forward HQ', farm: 'Supply Depot', barracks: 'Barracks', factory: 'Motor Pool', techlab: 'R&D Lab', turret: 'Guard Tower', silo: 'Uplink Station' },
       mod(d) {
         for (const u of Object.values(d.units)) { if (u.range > 1) u.range = +(u.range * 1.15).toFixed(2); u.hp = Math.round(u.hp * 1.05); cost(u, 1.1); }
         d.buildings.derrick.oilRate = +(d.buildings.derrick.oilRate * 1.3).toFixed(2);
@@ -99,26 +118,32 @@
       }
     },
     bear: {
-      name: 'Iron Bear Federation', short: 'Iron Bear', color: '#f0a32f', alt: '#e0e4ea', hull: '#59634f', emblem: 'shield', unique: 'juggernaut',
+      name: 'Iron Bear Federation', short: 'Iron Bear', color: '#f0a32f', alt: '#e0e4ea', hull: '#59634f', emblem: 'shield', unique: 'juggernaut', unique2: 'gunship',
       voice: { pitch: 0.55, rate: 0.95, select: ['Yes, commander.', 'Orders?', 'We are ready.', 'Speak.'], move: ['Moving.', 'As you command.', 'Forward.', 'It will be done.'], attack: ['Crush them.', 'Open fire.', 'No retreat.', 'For the Federation.'] },
       tagline: 'Heavy armor. Big guns. No retreat.',
-      perks: ['Vehicles have +25% HP', 'Tanks hit 15% harder', 'Elite: Tsar Tank super-heavy', 'Vehicles move 5% slower'],
+      perks: ['Vehicles have +25% HP', 'Tanks hit 15% harder', 'Elites: Tsar Tank and Hind Gunship', 'Superweapon: Tsar Missile, one enormous blast', 'Vehicles move 5% slower'],
+      strike: { name: 'Tsar Missile', n: 1, radius: 5.5, dmg: 650, dtype: 'explosive', spread: 0, gap: 1, look: 'nuke' },
+      doctrine: { name: 'Field Workshops', desc: 'Vehicles repair themselves, regaining 1% of their health every second.',
+        apply(d) { for (const u of Object.values(d.units)) if (u.veh) u.regen = 0.01; } },
       names: { worker: 'Worker', rifle: 'Motor Rifleman', rocket: 'RPG Trooper', buggy: 'BTR Scout', tank: 'Medved Tank', artillery: 'Msta Howitzer',
         transport: 'Condor Helicopter', airfield: 'Aerodrome',
-        hq: 'Federal Command', farm: 'Kolkhoz', barracks: 'Barracks', factory: 'Tank Works', techlab: 'Institute', turret: 'Bunker Gun' },
+        hq: 'Federal Command', farm: 'Kolkhoz', barracks: 'Barracks', factory: 'Tank Works', techlab: 'Institute', turret: 'Bunker Gun', silo: 'Missile Silo' },
       mod(d) {
         for (const u of Object.values(d.units)) if (u.veh) { u.hp = Math.round(u.hp * 1.25); u.speed = +(u.speed * 0.95).toFixed(2); }
         for (const k of ['tank', 'juggernaut']) d.units[k].dmg = Math.round(d.units[k].dmg * 1.15);
       }
     },
     vanguard: {
-      name: "People's Vanguard Army", short: 'Vanguard', color: '#e5484d', alt: '#ff8a3d', hull: '#5d6a3b', emblem: 'redstar', unique: 'barrage',
+      name: "People's Vanguard Army", short: 'Vanguard', color: '#e5484d', alt: '#ff8a3d', hull: '#5d6a3b', emblem: 'redstar', unique: 'barrage', unique2: 'mortar',
       voice: { pitch: 1.35, rate: 1.25, select: ['We serve.', 'Ready, comrade.', 'Command us.', 'We are many.'], move: ['At once.', 'Forward, together.', 'Marching.', 'We go.'], attack: ['For the people.', 'Charge.', 'Overwhelm them.', 'Attack.'] },
       tagline: 'Cheap. Fast. Endless.',
-      perks: ['Units cost 20% less and train 30% faster', 'Conscripts are trained two at a time', 'Elite: Barrage Truck rocket volleys', 'Units have 15% less HP'],
+      perks: ['Units cost 20% less and train 30% faster', 'Conscripts are trained two at a time', 'Elites: Barrage Truck and Mortar Team', 'Superweapon: Rocket Storm blankets a wide area', 'Units have 15% less HP'],
+      strike: { name: 'Rocket Storm', n: 24, radius: 1.7, dmg: 150, dtype: 'explosive', spread: 6, gap: 4, look: 'rocket' },
+      doctrine: { name: 'Mass Mobilization', desc: 'All units train 25% faster.',
+        apply(d) { for (const u of Object.values(d.units)) u.time = +(u.time * 0.75).toFixed(1); } },
       names: { worker: 'Laborer', rifle: 'Conscripts', rocket: 'RPG Team', buggy: 'Technical', tank: 'Chonma Tank', artillery: 'Koksan Gun',
         transport: 'Colt Biplane', airfield: 'Airstrip',
-        hq: 'Party Headquarters', farm: 'Collective Farm', barracks: 'Conscription Office', factory: 'Tractor Plant', techlab: 'Rocket Institute', turret: 'Gun Nest' },
+        hq: 'Party Headquarters', farm: 'Collective Farm', barracks: 'Conscription Office', factory: 'Tractor Plant', techlab: 'Rocket Institute', turret: 'Gun Nest', silo: 'Rocket Battery' },
       descs: { rifle: 'Two cheap conscripts per order. Strength in numbers.' },
       mod(d) {
         for (const u of Object.values(d.units)) { cost(u, 0.8); u.time = +(u.time * 0.7).toFixed(1); u.hp = Math.round(u.hp * 0.85); }
@@ -128,19 +153,37 @@
     }
   };
   R.FACTIONS.dragon = {
-    name: 'Jade Dragon Republic', short: 'Jade Dragon', color: '#2fc48d', alt: '#f2d14a', hull: '#6c7f78', emblem: 'goldstar', unique: 'flame',
+    name: 'Jade Dragon Republic', short: 'Jade Dragon', color: '#2fc48d', alt: '#f2d14a', hull: '#6c7f78', emblem: 'goldstar', unique: 'flame', unique2: 'gatling',
     voice: { pitch: 0.85, rate: 1.2, select: ['Reporting.', 'The Republic is ready.', 'Your orders?', 'Standing in formation.'], move: ['Advancing.', 'In formation.', 'Understood.', 'Moving as one.'], attack: ['Strength in numbers.', 'Burn them out.', 'All units, fire.', 'For the Republic.'] },
     tagline: 'Industry. Numbers. Fight as one.',
-    perks: ['Buildings cost 25% less and go up 40% faster', 'Massed: units deal +25% damage with 5 or more comrades nearby', 'Elite: Fire Dragon flamethrower tank', 'Vehicles burn 15% more oil'],
+    perks: ['Buildings cost 25% less and go up 40% faster', 'Massed: units deal +25% damage with 5 or more comrades nearby', 'Elites: Fire Dragon and Gatling Tank', 'Superweapon: Firestorm burns an area for eight seconds', 'Vehicles burn 15% more oil'],
+    strike: { name: 'Firestorm', n: 10, radius: 4.5, dmg: 80, dtype: 'explosive', spread: 0, gap: 16, look: 'flame' },
+    doctrine: { name: 'Human Wave', desc: 'The massed bonus rises from +25% to +45% damage.',
+      apply(d) { for (const u of Object.values(d.units)) if (u.horde) u.horde = 1.45; } },
     names: { worker: 'Construction Crew', rifle: 'Guardsman', rocket: 'Red Arrow Team', buggy: 'Lynx Scout', tank: 'Tiger Tank', artillery: 'Thunder Gun',
       transport: 'Crane Airlifter', airfield: 'Air Corps Field',
-      hq: 'Central Command', farm: 'Granary', barracks: 'Garrison', factory: 'Heavy Industry Plant', techlab: 'Weapons Bureau', turret: 'Sentry Gun' },
+      hq: 'Central Command', farm: 'Granary', barracks: 'Garrison', factory: 'Heavy Industry Plant', techlab: 'Weapons Bureau', turret: 'Sentry Gun', silo: 'Firestorm Battery' },
     mod(d) {
       for (const b of Object.values(d.buildings)) { cost(b, 0.75); b.time = +(b.time * 0.6).toFixed(1); }
       for (const u of Object.values(d.units)) { if (u.veh) u.oil = round5(u.oil * 1.15); if (u.dmg) u.horde = 1.25; }
       d.units.transport.cap = 12;                            // heavy airlifter: moves a whole platoon
     }
   };
+  // Research, bought at the Tech Lab. weapons/armor have two levels; doctrine is each faction's own (FACTIONS[f].doctrine).
+  R.RESEARCH = {
+    weapons: { name: 'Weapons', key: 'w', desc: 'All units and turrets deal 10% more damage per level.',
+      levels: [{ cash: 300, oil: 150, time: 45 }, { cash: 500, oil: 300, time: 70 }] },
+    armor: { name: 'Armor', key: 'a', desc: 'All units gain 10% health per level.',
+      levels: [{ cash: 300, oil: 150, time: 45 }, { cash: 500, oil: 300, time: 70 }] },
+    doctrine: { name: 'Doctrine', key: 'd', desc: '', levels: [{ cash: 400, oil: 200, time: 60 }] }
+  };
+  R.RESEARCH_ORDER = ['weapons', 'armor', 'doctrine'];
+  // Veterancy: a unit is promoted once it has destroyed VET_AT[rank] times its own price.
+  R.VET_AT = [2, 5]; R.VET_DMG = 0.15; R.VET_HP = 0.1; R.VET_REGEN = 0.01;
+  R.RANKS = ['', 'Veteran', 'Elite'];
+  R.STRIKE_WARN = 80;   // ticks between a superweapon launch and its first blast
+  R.MAX_PLAYERS = 4;
+  R.COLORS = ['#c779ff', '#ff7bd5', '#9be25a', '#f4f4f4'];   // spare player colors when faction colors run out
   R.HORDE_SIZE = 5;     // comrades needed within HORDE_RANGE tiles for the massed bonus
   R.HORDE_RANGE = 3.5;
   R.FACTION_ORDER = ['liberty', 'bear', 'vanguard', 'dragon'];

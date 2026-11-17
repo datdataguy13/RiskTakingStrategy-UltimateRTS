@@ -1,6 +1,7 @@
 // Multiplayer end-to-end test: starts the real server, connects two clients running the
 // real client code (js/net.js), has a computer player drive each side over the network,
-// and checks that both copies of the simulation stay identical for a whole match.
+// and checks that both copies of the simulation stay identical for a whole match,
+// with a computer player in the room and one client dropping out and rejoining from scratch.
 // Usage: node test/net-test.js [maxMinutesOfGameTime]
 'use strict';
 const net = require('net'), crypto = require('crypto');
@@ -51,34 +52,59 @@ class NodeWS {
 
 (async () => {
   const maxTicks = (+process.argv[2] || 14) * 60 * R.TPS;
-  const server = await start(0, true, 1);   // 1 ms turns: play the match as fast as the machine allows
+  const server = await start(0, true, 1, 20000);   // 1 ms turns: play the match as fast as the machine allows
   const url = `ws://127.0.0.1:${server.address().port}/ws`;
-  const mk = () => ({ net: new R.Net(NodeWS), sim: null, ai: null, hashes: new Map(), desync: false });
-  const A = mk(), B = mk();
+  const mk = () => ({ net: new R.Net(NodeWS), sim: null, ai: null, hashes: new Map(), start: null });
+  const A = mk();
+  let B = mk();
   let codeResolve; const gotCode = new Promise(r => { codeResolve = r; });
-  let started = 0, fail = null;
+  let fail = null, rejoined = 0, chat = 0;
 
-  for (const c of [A, B]) {
-    c.net.on('room', m => { if (c === A) { if (m.players.length === 1) codeResolve(m.code); else c.net.send({ t: 'start' }); } });
+  // Build this client's copy of the match. Computer slots think locally, before every tick, on each client.
+  const begin = (c, m) => {
+    c.start = m;
+    c.sim = new R.Sim({ seed: m.seed, theme: m.theme, players: m.players.map(p => ({ faction: p.faction, team: p.team, ai: !!p.ai, name: p.name })) });
+    const bots = m.players.map((p, i) => p.ai ? new R.AI(c.sim, i, p.ai) : null).filter(Boolean);
+    c.net.pre = () => { for (const b of bots) b.update(); };
+    c.ai = new R.AI(c.sim, m.you, 'hard');      // stands in for the human at this client:
+    c.ai.cmd = cmd => c.net.cmd(cmd);           // its orders go out over the network like a player's
+  };
+  const wire = c => {
     c.net.on('error', m => { fail = 'server error: ' + m.msg; });
-    c.net.on('desync', m => { c.desync = true; fail = 'DESYNC reported by server at turn ' + m.n; });
-    c.net.on('start', m => {
-      c.sim = new R.Sim({ seed: m.seed, theme: m.theme, players: m.factions.map(f => ({ faction: f })) });
-      c.ai = new R.AI(c.sim, m.you, 'hard');
-      c.ai.cmd = cmd => c.net.cmd(cmd);       // the computer player issues its orders through the network
-      c.me = m.you; started++;
-    });
-    await c.net.connect(url);
-  }
-  A.net.send({ t: 'host', faction: 'bear', theme: 'desert' });
-  B.net.send({ t: 'join', code: await gotCode, faction: 'vanguard' });
+    c.net.on('desync', m => { fail = 'DESYNC reported by server at turn ' + m.n; });
+    c.net.on('chat', () => { chat++; });
+    c.net.on('start', m => begin(c, m));
+    c.net.on('resume', m => { if (!c.sim) begin(c, m.start); rejoined++; });
+  };
+  wire(A); wire(B);
+  A.net.on('room', m => {
+    if (m.slots.length === 1) codeResolve(m.code);
+    else if (m.slots.length === 2) A.net.send({ t: 'ai', op: 'add', difficulty: 'hard' });
+    else if (m.slots[2].team !== 1) A.net.send({ t: 'ai', op: 'set', slot: 2, team: 1, faction: 'dragon' });   // computer allied with B
+    else A.net.send({ t: 'start' });
+  });
+  await A.net.connect(url); await B.net.connect(url);
+  A.net.send({ t: 'host', name: 'Ann', faction: 'bear', theme: 'desert' });
+  const code = await gotCode;
+  B.net.send({ t: 'join', code, name: 'Bob', faction: 'vanguard' });
 
   const t0 = Date.now();
+  let dropped = false;
   await new Promise(resolve => {
     const loop = () => {
       if (fail) return resolve();
-      if (started === 2) {
+      if (A.sim && B.sim) {
         for (const c of [A, B]) c.net.advance(c.sim, 1, () => { c.ai.update(); c.sim.events.length = 0; if (c.sim.tick % 200 === 0) c.hashes.set(c.sim.tick, c.sim.hash()); });
+        // part-way through, B's browser "reloads": the connection drops and a brand-new client rejoins
+        // with only the room code and its key, and has to rebuild the whole match from the server's log
+        if (!dropped && B.sim.tick > 3000) {
+          dropped = true;
+          const key = B.start.key, old = B;
+          old.net.close();
+          B = mk(); wire(B); B.hashes = old.hashes;
+          B.net.connect(url).then(() => B.net.send({ t: 'rejoin', code, key, from: 0 }));
+          A.net.send({ t: 'chat', text: 'still there?' });
+        }
         const done = c => c.sim.winner >= 0 || c.sim.tick >= maxTicks;
         if (done(A) && done(B)) return resolve();
       }
@@ -88,14 +114,30 @@ class NodeWS {
     loop();
   });
 
-  let checked = 0;
-  if (!fail) for (const [tick, h] of A.hashes) { if (B.hashes.has(tick)) { checked++; if (B.hashes.get(tick) !== h) { fail = 'state mismatch at tick ' + tick; break; } } }
+  let checked = 0, late = 0;
+  if (!fail) for (const [tick, h] of A.hashes) { if (B.hashes.has(tick)) { checked++; if (tick > 3400) late++; if (B.hashes.get(tick) !== h) { fail = 'state mismatch at tick ' + tick; break; } } }
   if (!fail && A.sim.winner !== B.sim.winner) fail = 'clients disagree on the winner';
   if (!fail && checked < 5) fail = 'too few checkpoints compared';
+  if (!fail && (rejoined !== 1 || late < 3)) fail = 'the rejoin did not happen or was not checked (rejoined ' + rejoined + ', checkpoints after it ' + late + ')';
+  if (!fail && !chat) fail = 'chat was not relayed';
+  if (!fail && A.sim.players.length !== 3) fail = 'expected three players';
+  // match over: the server puts everyone back in the lobby, and the host can start a rematch
+  if (!fail) {
+    const got = { A: null, B: null, again: 0 };
+    A.net.on('room', m => { got.A = m; }); B.net.on('room', m => { got.B = m; });
+    A.net.on('start', () => got.again++); B.net.on('start', () => got.again++);
+    A.net.send({ t: 'over', match: A.start.match + 1 });      // wrong match number: must be ignored
+    await new Promise(r => setTimeout(r, 150));
+    if (got.A) fail = 'a stale match-over report ended the match';
+    A.net.send({ t: 'over', match: A.start.match });
+    await new Promise(r => setTimeout(r, 300));
+    if (!got.A || !got.B || got.A.slots.length !== 3 || got.B.slots.length !== 3) fail = 'players were not returned to the lobby together';
+    else { A.net.send({ t: 'start' }); await new Promise(r => setTimeout(r, 300)); if (got.again !== 2) fail = 'the rematch did not start for both players'; }
+  }
   const cmds = c => c.sim.players.map(p => p.stats.built).join('/');
   if (fail) console.log('FAIL: ' + fail);
-  else console.log(`PASS: ${checked} checkpoints identical over ${(A.sim.tick / R.TPS / 60).toFixed(1)} game-minutes; ` +
-    (A.sim.winner >= 0 ? `winner ${A.sim.players[A.sim.winner].name}` : 'no winner yet') + `; units trained ${cmds(A)} (A) vs ${cmds(B)} (B)`);
+  else console.log(`PASS: 2 humans + 1 computer, ${checked} checkpoints identical over ${(A.sim.tick / R.TPS / 60).toFixed(1)} game-minutes (${late} after a drop and rejoin), rematch started; ` +
+    (A.sim.winner >= 0 ? `team ${A.sim.winner} won` : 'no winner yet') + `; units trained ${cmds(A)} (A) vs ${cmds(B)} (B)`);
   A.net.close(); B.net.close(); server.close();
   process.exit(fail ? 1 : 0);
 })();

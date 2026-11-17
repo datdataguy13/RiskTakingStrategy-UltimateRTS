@@ -53,6 +53,10 @@
         case 'unit': this.tone(660, 660, 0.07, 'triangle', 0.12); this.tone(880, 880, 0.1, 'triangle', 0.12, 0.07); break;
         case 'alert': for (let k = 0; k < 3; k++) { this.tone(640, 640, 0.14, 'square', 0.07, k * 0.3); this.tone(470, 470, 0.14, 'square', 0.07, k * 0.3 + 0.15); } break;
         case 'err': this.tone(170, 140, 0.14, 'square', 0.08); break;
+        case 'ping': this.tone(880, 880, 0.09, 'sine', 0.16); this.tone(1320, 1320, 0.16, 'sine', 0.16, 0.09); break;
+        case 'promo': this.tone(660, 990, 0.16, 'triangle', 0.12); break;
+        case 'siren': for (let k = 0; k < 3; k++) { this.tone(420, 880, 0.5, 'sawtooth', 0.07, k * 1.0); this.tone(880, 420, 0.5, 'sawtooth', 0.07, k * 1.0 + 0.5); } break;
+        case 'nuke': this.noise(2.4, 0.9, 'lowpass', 2600, 35); this.tone(60, 20, 2.0, 'sine', 0.9); this.noise(0.9, 0.3, 'bandpass', 700, 150, 0.2); break;
       }
     },
     // Spoken line. kind 'ack' = unit chatter (dropped if someone is already talking), 'eva' = announcer (takes priority).

@@ -1,16 +1,18 @@
 // Computer opponent. Plays by the same rules as a human: it only issues
 // commands through sim.command() and gets no resource or vision bonuses
-// beyond knowing where enemy buildings stand.
+// beyond knowing where enemy buildings stand. Its decisions depend only on the
+// simulation state and a seeded random stream, so every copy of a multiplayer
+// match (and every replay) reaches the same decisions.
 (function (G) {
   'use strict';
   const R = G.RTS;
 
   const CFG = {
-    easy: { period: 40, workers: 8, wave: 5, grow: 2, minTick: 8400, queue: 1, food: 2, maxBar: 1, maxFac: 1, edge: 1.0,
+    easy: { period: 40, workers: 8, wave: 5, grow: 2, minTick: 8400, queue: 1, food: 2, maxBar: 1, maxFac: 1, edge: 1.0, research: 0, silo: 0,
       order: [['barracks', 1], ['derrick', 1], ['factory', 1], ['derrick', 2], ['turret', 1]] },
-    normal: { period: 20, workers: 12, wave: 7, grow: 3, minTick: 6000, queue: 1, food: 4, maxBar: 3, maxFac: 2, edge: 1.25,
+    normal: { period: 20, workers: 12, wave: 7, grow: 3, minTick: 6000, queue: 1, food: 4, maxBar: 3, maxFac: 2, edge: 1.25, research: 3, silo: 19200,
       order: [['barracks', 1], ['derrick', 1], ['factory', 1], ['derrick', 2], ['turret', 1], ['techlab', 1], ['barracks', 2], ['turret', 2]] },
-    hard: { period: 10, workers: 16, wave: 10, grow: 4, minTick: 4200, queue: 2, food: 6, maxBar: 4, maxFac: 3, edge: 1.4,
+    hard: { period: 10, workers: 16, wave: 10, grow: 4, minTick: 4200, queue: 2, food: 6, maxBar: 4, maxFac: 3, edge: 1.4, research: 5, silo: 13200,
       order: [['barracks', 1], ['derrick', 1], ['factory', 1], ['derrick', 2], ['techlab', 1], ['barracks', 2], ['factory', 2], ['turret', 2], ['derrick', 3], ['turret', 3]] }
   };
 
@@ -66,7 +68,11 @@
       let foeArmy = 0;
       for (const e of sim.ents) {
         if (e.dead || e.owner < 0) continue;
-        if (e.owner !== pid) { if (e.kind === 'building') foes.push(e); else if (e.def.dmg) foeArmy += e.def.supply; continue; }
+        if (e.owner !== pid) {
+          if (!sim.hostile(pid, e.owner)) continue;          // allies are left alone
+          if (e.kind === 'building') foes.push(e); else if (e.def.dmg) foeArmy += e.def.supply;
+          continue;
+        }
         if (e.kind === 'building') { blds.push(e); cnt[e.type] = (cnt[e.type] || 0) + 1; if (e.type === 'hq' && e.built) hqs.push(e); }
         else if (e.type === 'worker') workers.push(e); else army.push(e);
       }
@@ -93,7 +99,7 @@
 
       // --- construction ---
       const pending = blds.filter(b => !b.built);
-      let reserve = 0;
+      let reserve = 0, oilReserve = 0;
       const build = (type, s) => {
         const d = B[type];
         if (cash >= d.cash && oil >= (d.oil || 0)) { this.cmd({ type: 'build', btype: type, tx: s.tx, ty: s.ty }); cash -= d.cash; oil -= d.oil || 0; }
@@ -131,39 +137,74 @@
             planned = true;
             break;
           }
-          // build order finished and cash piling up: add production
+          // build order finished and cash piling up: a superweapon if rich enough, else more production
+          const wantAir = U[p.unique2] && U[p.unique2].from === 'airfield' && sim.has(pid, 'techlab') && !cnt.airfield;
+          // late in the game, with a real army in the field, save up for the superweapon
+          if (!planned && cfg.silo && !cnt.silo && sim.tick > cfg.silo && p.used >= 60 && sim.has(pid, 'techlab')) {
+            if (cash >= B.silo.cash && oil >= B.silo.oil) {
+              const s = this.spot('silo', home.x - dx * 4, home.y - dy * 4, 14);
+              if (s) { build('silo', s); planned = true; }
+            } else { reserve = Math.max(reserve, B.silo.cash); oilReserve = B.silo.oil; planned = true; }
+          }
           if (!planned && cash > 700) {
-            const type = oil > 150 && (cnt.factory || 0) < cfg.maxFac ? 'factory' : (cnt.barracks || 0) < cfg.maxBar ? 'barracks' : null;
+            const type = wantAir && oil > 200 ? 'airfield' : oil > 150 && (cnt.factory || 0) < cfg.maxFac ? 'factory' : (cnt.barracks || 0) < cfg.maxBar ? 'barracks' : null;
             const s = type && this.spot(type, home.x, home.y, 14);
             if (s) build(type, s);
           }
         }
       }
-      if (threat) reserve = 0;
+      if (threat) reserve = oilReserve = 0;
 
       // --- production ---
       const tech = sim.has(pid, 'techlab');
       const stage = sim.nearestFree(home.x + dx * 11, home.y + dy * 11);
       let used = p.used;
       // factories get first call on cash so armor is not starved by infantry
-      const prod = blds.filter(b => b.type === 'factory').concat(blds.filter(b => b.type === 'barracks'));
+      const u2 = U[p.unique2];
+      const prod = blds.filter(b => b.type === 'factory').concat(blds.filter(b => b.type === 'barracks'), blds.filter(b => b.type === 'airfield'));
       for (const b of prod) {
         if (!b.built) continue;
         if (!b.rally) this.cmd({ type: 'rally', building: b.id, x: stage.x, y: stage.y });
         if (b.queue.length >= cfg.queue) continue;
         const r = this.rnd();
         let pick;
-        if (b.type === 'barracks') pick = r < 0.6 ? 'rifle' : 'rocket';
-        else if (tech) pick = r < 0.2 ? 'buggy' : r < 0.55 ? 'tank' : r < 0.75 ? 'artillery' : p.unique;
+        if (b.type === 'airfield') { if (!tech || u2.from !== 'airfield' || r < 0.5) continue; pick = p.unique2; }
+        else if (b.type === 'barracks') pick = tech && u2.from === 'barracks' && r > 0.8 ? p.unique2 : r < 0.6 ? 'rifle' : 'rocket';
+        else if (tech) pick = r < 0.2 ? 'buggy' : r < 0.5 ? 'tank' : r < 0.7 ? 'artillery' : u2.from === 'factory' && r > 0.87 ? p.unique2 : p.unique;
         else pick = r < 0.3 ? 'buggy' : 'tank';
         const d = U[pick];
-        if (used + d.supply > p.cap || oil < (d.oil || 0)) continue;
+        if (used + d.supply > p.cap || oil < (d.oil || 0) || (d.oil && oil - d.oil < oilReserve)) continue;
         if (cash - d.cash < reserve) {
           if (b.type === 'factory') reserve += d.cash;   // save up for armor instead of spending it all on infantry
           continue;
         }
         this.cmd({ type: 'train', building: b.id, utype: pick });
         cash -= d.cash; oil -= d.oil || 0; used += d.supply;
+      }
+
+      // --- research and superweapon ---
+      if (cfg.research && !threat) {
+        const order = ['weapons', 'armor', 'doctrine', 'weapons', 'armor'].slice(0, cfg.research);
+        const want = { weapons: 0, armor: 0, doctrine: 0 };
+        let next = null;
+        for (const k of order) { want[k]++; if (p.research[k] < want[k] && !p.busy[k]) { next = k; break; } }
+        const lab = next && blds.find(b => b.type === 'techlab' && b.built && !b.res);
+        const spec = next && R.RESEARCH[next].levels[p.research[next]];
+        if (lab && spec && cash - spec.cash >= reserve + 300 && oil - spec.oil >= 100) {
+          this.cmd({ type: 'research', building: lab.id, key: next }); cash -= spec.cash; oil -= spec.oil;
+        }
+      }
+      const silo = blds.find(b => b.type === 'silo' && b.built && b.charge >= b.def.charge * R.TPS);
+      if (silo && foes.length) {
+        // aim where the most enemy buildings sit close together
+        let best = foes[0], bn = -1;
+        const rad = p.strike.radius + p.strike.spread;
+        for (const f of foes) {
+          let n = f.type === 'hq' ? 0.5 : 0;
+          for (const g of foes) if (Math.hypot(g.x - f.x, g.y - f.y) <= rad) n++;
+          if (n > bn) { bn = n; best = f; }
+        }
+        this.cmd({ type: 'strike', building: silo.id, x: best.x, y: best.y });
       }
 
       // --- military ---

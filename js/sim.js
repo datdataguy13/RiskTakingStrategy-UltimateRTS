@@ -33,12 +33,12 @@
 
   class Sim {
     constructor(o) {
-      const W = this.W = this.H = o.size || 72, N = W * W;
+      const W = this.W = this.H = o.size || (o.players.length > 2 ? 96 : 72), N = W * W;
       this.seed = o.seed | 0;
       this.theme = R.THEMES[o.theme] ? o.theme : 'grass';
       this.road = null;
       this.tick = 0; this.nextId = 1;
-      this.ents = []; this.byId = new Map(); this.proj = [];
+      this.ents = []; this.byId = new Map(); this.proj = []; this.strikes = [];
       this.events = []; this.cmdQ = [];
       this.winner = -1; this.dirty = true; this.anyDead = false; this.fogV = 0;
       this.terrain = new Uint8Array(N);   // 0 grass, 1 water, 2 trees, 3 rock
@@ -48,17 +48,24 @@
       this._hf = []; this._hi = [];
       this._head = new Int32Array(N); this._nxt = []; this._sight = new Map();
 
+      // Players on the same team are allies: they share vision and never shoot each other.
+      // With no team given, everyone is on their own side.
+      const fog = new Map(), taken = new Set();
       this.players = o.players.map((pl, i) => {
-        const f = R.FACTIONS[pl.faction];
+        const f = R.FACTIONS[pl.faction], team = Number.isInteger(pl.team) ? pl.team : i;
+        if (!fog.has(team)) fog.set(team, { visible: new Uint8Array(N), explored: new Uint8Array(N) });
+        const color = [f.color, f.alt].concat(R.COLORS).find(c => !taken.has(c)) || f.color;
+        taken.add(color);
         return {
-          id: i, faction: pl.faction, name: f.name, defs: R.makeDefs(pl.faction), unique: f.unique, hull: f.hull, emblem: f.emblem,
-          color: f.color, cash: R.START_CASH, oil: 0, used: 0, cap: 0, alive: true, ai: !!pl.ai,
-          visible: new Uint8Array(N), explored: new Uint8Array(N), lastAttack: null,
+          id: i, team, faction: pl.faction, name: f.name, label: pl.name || '', defs: R.makeDefs(pl.faction), unique: f.unique, unique2: f.unique2,
+          hull: f.hull, emblem: f.emblem, strike: f.strike, doctrine: f.doctrine,
+          color, cash: R.START_CASH, oil: 0, used: 0, cap: 0, alive: true, ai: !!pl.ai,
+          visible: fog.get(team).visible, explored: fog.get(team).explored, lastAttack: null,
+          research: { weapons: 0, armor: 0, doctrine: 0 }, busy: {},
           stats: { cash: 0, oil: 0, spent: 0, built: 0, unitsLost: 0, bldLost: 0, killValue: 0, lostValue: 0, unitsKilled: 0, bldKilled: 0 }
         };
       });
-      if (this.players[1] && this.players[1].faction === this.players[0].faction)
-        this.players[1].color = R.FACTIONS[this.players[1].faction].alt;
+      this.teamOf = this.players.map(p => p.team);
 
       this.genMap();
       this.recalc();
@@ -67,64 +74,96 @@
 
     // ---------- map ----------
     genMap() {
-      const W = this.W, H = this.H, t = this.terrain;
-      const mir = (p) => [W - 2 - p[0], H - 2 - p[1]];
-      const ORE = [[12, 4, 6000], [4, 12, 6000], [30, 7, 8000], [7, 30, 8000], [35, 35, 10000]];
-      const SEEP = [[13, 9], [9, 13], [34, 18], [18, 40]];
-      const ores = [], seeps = [];
-      for (const o of ORE) { ores.push(o); const m = mir(o); if (m[0] !== o[0] || m[1] !== o[1]) ores.push([m[0], m[1], o[2]]); }
-      for (const s of SEEP) { seeps.push(s); seeps.push(mir(s)); }
-      const bases = [[7.5, 7.5], [W - 7.5, H - 7.5]];
+      const W = this.W, H = this.H, t = this.terrain, n = this.players.length, four = n > 2;
+      // Two players: the map is a point mirror of itself. Three or four: it is mirrored left-right and
+      // top-bottom, so all four corners are identical. Resources are laid out for the top-left corner.
+      const syms = four ? [p => p, p => [W - 2 - p[0], p[1]], p => [p[0], H - 2 - p[1]], p => [W - 2 - p[0], H - 2 - p[1]]]
+        : [p => p, p => [W - 2 - p[0], H - 2 - p[1]]];
+      const mid = W / 2 - 1;
+      const ORE = four ? [[12, 4, 6000], [4, 12, 6000], [30, 7, 8000], [7, 30, 8000], [mid, 20, 8000], [20, mid, 8000], [mid, mid, 14000]]
+        : [[12, 4, 6000], [4, 12, 6000], [30, 7, 8000], [7, 30, 8000], [35, 35, 10000]];
+      const SEEP = four ? [[13, 9], [9, 13], [34, 18], [18, 34]] : [[13, 9], [9, 13], [34, 18], [18, 40]];
+      const spread = (list) => {
+        const out = [], seen = new Set();
+        for (const o of list) for (const f of syms) {
+          const m = f(o), k = m[0] + ',' + m[1];
+          if (!seen.has(k)) { seen.add(k); out.push([m[0], m[1], o[2]]); }
+        }
+        return out;
+      };
+      const ores = spread(ORE), seeps = spread(SEEP);
+      // corners: HQ tile, where the first workers stand, and the spot paths are checked from
+      const C = [
+        { hq: [6, 6], wx: 5.5, wy: 9.5, dx: 1 }, { hq: [W - 9, H - 9], wx: W - 5.5, wy: H - 9.5, dx: -1 },
+        { hq: [W - 9, 6], wx: W - 5.5, wy: 9.5, dx: -1 }, { hq: [6, H - 9], wx: 5.5, wy: H - 9.5, dx: 1 }
+      ];
+      // which corner each player gets: with exactly two teams, allies start on the same side of the map
+      const teams = []; for (const p of this.players) if (!teams.includes(p.team)) teams.push(p.team);
+      const side = teams.length === 2 ? [[0, 3], [1, 2]] : null, used = new Set();
+      const corner = this.players.map(p => {
+        let c = side ? side[teams.indexOf(p.team)].shift() : undefined;
+        if (c === undefined || used.has(c)) c = [0, 1, 2, 3].find(k => !used.has(k));
+        used.add(c);
+        return C[c];
+      });
+      const bases = four ? C : C.slice(0, 2);
 
       for (let attempt = 0; attempt < 30; attempt++) {
         const rnd = rng32(this.seed + attempt * 7919);
         const n1 = noiseGrid(rnd, W, 9), n2 = noiseGrid(rnd, W, 6);
         const th = R.THEMES[this.theme];
         const water = attempt < 20 ? th.water : 0, trees = attempt < 25 ? th.trees : 2;
-        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-          const i = y * W + x, m = (H - 1 - y) * W + (W - 1 - x);
-          if (i > m) continue;
-          let v = 0;
-          if (n1(x, y) < water) v = 1; else if (n2(x, y) > trees) v = 2; else if (rnd() < th.rock) v = 3;
-          t[i] = v; t[m] = v;
+        const pick = (x, y) => n1(x, y) < water ? 1 : n2(x, y) > trees ? 2 : rnd() < th.rock ? 3 : 0;
+        if (four) {
+          for (let y = 0; y < H / 2; y++) for (let x = 0; x < W / 2; x++) {
+            const v = pick(x, y), x2 = W - 1 - x, y2 = H - 1 - y;
+            t[y * W + x] = v; t[y * W + x2] = v; t[y2 * W + x] = v; t[y2 * W + x2] = v;
+          }
+        } else {
+          for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            const i = y * W + x, m = (H - 1 - y) * W + (W - 1 - x);
+            if (i > m) continue;
+            const v = pick(x, y);
+            t[i] = v; t[m] = v;
+          }
         }
         const clear = (cx, cy, r) => {
           for (let y = Math.max(0, (cy - r) | 0); y <= Math.min(H - 1, cy + r); y++)
             for (let x = Math.max(0, (cx - r) | 0); x <= Math.min(W - 1, cx + r); x++)
               if (Math.hypot(x + 0.5 - cx, y + 0.5 - cy) <= r) t[y * W + x] = 0;
         };
-        for (const b of bases) clear(b[0], b[1], 10);
+        for (const b of bases) clear(b.hq[0] + 1.5, b.hq[1] + 1.5, 10);
         for (const o of ores) clear(o[0] + 1, o[1] + 1, 3.6);
         for (const s of seeps) clear(s[0] + 1, s[1] + 1, 3.6);
         for (let i = 0; i < t.length; i++) this.block[i] = t[i] ? 1 : 0;
-        // every base and resource must be reachable from player 1's base
+        // every base and resource must be reachable from the first corner
         let ok = true;
-        const from = [9.5, 10.5];
-        const targets = [[W - 9.5, H - 10.5]].concat(ores.map(o => [o[0] + 1, o[1] + 1]), seeps.map(s => [s[0] + 1, s[1] + 1]));
+        const targets = bases.slice(1).map(b => [b.wx, b.wy + (b.wy < H / 2 ? 1 : -1)]).concat(ores.map(o => [o[0] + 1, o[1] + 1]), seeps.map(s => [s[0] + 1, s[1] + 1]));
         for (const g of targets) {
-          if (!this.findPath(from[0], from[1], { x0: g[0], y0: g[1], x1: g[0], y1: g[1] }, 2.5).reached) { ok = false; break; }
+          if (!this.findPath(9.5, 10.5, { x0: g[0], y0: g[1], x1: g[0], y1: g[1] }, 2.5).reached) { ok = false; break; }
         }
         if (ok) break;
       }
 
       for (const o of ores) this.addNode('ore', o[0], o[1], o[2]);
       for (const s of seeps) this.addNode('seep', s[0], s[1], 0);
-      this.addBuilding('hq', 0, 6, 6, true);
-      for (let i = 0; i < 5; i++) this.addUnit('worker', 0, 5.5 + i, 9.5);
-      if (this.players[1]) {
-        this.addBuilding('hq', 1, W - 9, H - 9, true);
-        for (let i = 0; i < 5; i++) this.addUnit('worker', 1, W - 5.5 - i, H - 9.5);
-      }
+      this.players.forEach((p, i) => {
+        const c = corner[i];
+        p.home = { x: c.hq[0] + 1.5, y: c.hq[1] + 1.5 };
+        this.addBuilding('hq', i, c.hq[0], c.hq[1], true);
+        for (let k = 0; k < 5; k++) this.addUnit('worker', i, c.wx + k * c.dx, c.wy);
+      });
       for (const u of this.ents) if (u.kind === 'unit') this.autoGather(u);
-      // cosmetic supply road linking the bases
-      this.road = this.findPath(9.5, 10.5, { x0: W - 9.5, y0: H - 10.5, x1: W - 9.5, y1: H - 10.5 }, 1.5).path;
+      // cosmetic supply road linking the two bases of a duel
+      if (!four) this.road = this.findPath(9.5, 10.5, { x0: W - 9.5, y0: H - 10.5, x1: W - 9.5, y1: H - 10.5 }, 1.5).path;
     }
 
     // ---------- entities ----------
     addUnit(type, owner, x, y) {
       const d = this.players[owner].defs.units[type];
       const u = { id: this.nextId++, kind: 'unit', type, owner, def: d, x, y, px: x, py: y, hp: d.hp, maxHp: d.hp,
-        facing: owner ? Math.PI : 0, order: { type: 'idle' }, path: null, pi: 0, target: 0, cd: 0, carry: 0, repath: 0, chute: 0, cargo: d.cap ? [] : null, dead: false };
+        facing: owner ? Math.PI : 0, order: { type: 'idle' }, path: null, pi: 0, target: 0, cd: 0, carry: 0, repath: 0, chute: 0, cargo: d.cap ? [] : null,
+        xp: 0, rank: 0, dead: false };
       this.ents.push(u); this.byId.set(u.id, u); this.dirty = true;
       return u;
     }
@@ -132,7 +171,7 @@
       const d = this.players[owner].defs.buildings[type];
       const b = { id: this.nextId++, kind: 'building', type, owner, def: d, tx, ty, w: d.w, h: d.h,
         x: tx + d.w / 2, y: ty + d.h / 2, hp: built ? d.hp : d.hp * 0.1, maxHp: d.hp, built: !!built, progress: built ? 1 : 0,
-        queue: [], rally: null, cd: 0, target: 0, facing: 0, seep: 0, work: -9, dead: false };
+        queue: [], rally: null, cd: 0, target: 0, facing: 0, seep: 0, work: -9, res: null, charge: 0, dead: false };
       if (type === 'derrick') {
         const s = this.seepAt(tx, ty);
         if (s) { s.covered = true; b.seep = s.id; }
@@ -158,6 +197,7 @@
       for (const e of this.ents) if (e.owner === pid && e.kind === 'building' && e.type === type && e.built && !e.dead) return true;
       return false;
     }
+    hostile(a, b) { return a >= 0 && b >= 0 && this.teamOf[a] !== this.teamOf[b]; }
     blocked(x, y) {
       const tx = x | 0, ty = y | 0;
       return x < 0 || y < 0 || tx >= this.W || ty >= this.H || this.block[ty * this.W + tx] === 1;
@@ -331,7 +371,7 @@
       const p = this.players[c.player];
       if (!p || !p.alive) return;
       // commands may arrive over the network: never trust their shape
-      if ((c.type === 'move' || c.type === 'amove' || c.type === 'rally') && !(fin(c.x) && fin(c.y))) return;
+      if ((c.type === 'move' || c.type === 'amove' || c.type === 'rally' || c.type === 'strike') && !(fin(c.x) && fin(c.y))) return;
       if (c.type === 'build' && !(Number.isInteger(c.tx) && Number.isInteger(c.ty))) return;
       switch (c.type) {
         case 'move': case 'amove':
@@ -340,7 +380,7 @@
           for (const u of this.own(c.ids, c.player)) this.idle(u); break;
         case 'attack': {
           const t = this.byId.get(c.target);
-          if (!t || t.owner < 0 || t.owner === c.player) return;
+          if (!t || !this.hostile(c.player, t.owner)) return;
           for (const u of this.own(c.ids, c.player)) {
             if (u.def.dmg) { u.order = { type: 'attack', target: t.id }; u.target = 0; u.path = null; }
             else this.orderMove([u], t.x, t.y, 'move');
@@ -410,7 +450,9 @@
         }
         case 'cancel': {
           const b = this.byId.get(c.building);
-          if (!b || b.owner !== c.player || b.kind !== 'building' || !b.queue.length) return;
+          if (!b || b.owner !== c.player || b.kind !== 'building') return;
+          if (b.res) { this.pay(p, b.res.spec, -1); delete p.busy[b.res.key]; b.res = null; return; }
+          if (!b.queue.length) return;
           const q = b.queue.pop();
           this.pay(p, p.defs.units[q.type], -1); this.dirty = true;
           break;
@@ -421,7 +463,57 @@
           b.rally = { x: c.x, y: c.y, node: c.node || 0 };
           break;
         }
+        case 'research': {
+          const b = this.byId.get(c.building), r = R.RESEARCH[c.key];
+          if (!b || !r || b.owner !== c.player || b.kind !== 'building' || b.type !== 'techlab' || !b.built) return;
+          if (b.res) return this.msg(c.player, 'This lab is already researching');
+          const spec = r.levels[p.research[c.key]];
+          if (!spec) return this.msg(c.player, 'Already fully researched');
+          if (p.busy[c.key]) return this.msg(c.player, 'Already being researched');
+          if (p.cash < spec.cash) return this.msg(c.player, 'Not enough cash');
+          if (p.oil < spec.oil) return this.msg(c.player, 'Not enough oil');
+          this.pay(p, spec, 1);
+          const total = Math.round(spec.time * TPS);
+          b.res = { key: c.key, left: total, total, spec }; p.busy[c.key] = 1;
+          break;
+        }
+        case 'strike': {   // fire a charged superweapon
+          const b = this.byId.get(c.building);
+          if (!b || b.owner !== c.player || b.type !== 'silo' || !b.built) return;
+          if (b.charge < b.def.charge * TPS) return this.msg(c.player, 'Still charging');
+          b.charge = 0;
+          const x = Math.min(this.W - 0.01, Math.max(0, c.x)), y = Math.min(this.H - 0.01, Math.max(0, c.y)), k = p.strike;
+          this.strikes.push({ x, y, owner: c.player, t: R.STRIKE_WARN, wait: 0, k: 0, cfg: k });
+          this.events.push({ type: 'strike', owner: c.player, x, y, radius: k.radius + k.spread, name: k.name, look: k.look });
+          break;
+        }
+        case 'surrender': this.eliminate(p); break;
       }
+    }
+    // Remove a player from the match: everything they own is destroyed.
+    eliminate(p) {
+      if (!p.alive) return;
+      p.alive = false; this.cmdOut = true;
+      for (const e of this.ents) if (e.owner === p.id && !e.dead) this.kill(e, -1);
+      this.events.push({ type: 'out', player: p.id });
+    }
+    // Finished research changes the player's own unit definitions, so every stat shown or used picks it up.
+    applyResearch(p, key) {
+      const d = p.defs, lvl = ++p.research[key];
+      delete p.busy[key];
+      if (key === 'weapons') {
+        for (const u of Object.values(d.units).concat(Object.values(d.buildings))) if (u.dmg) u.dmg = +(u.dmg * 1.1).toFixed(1);
+      } else if (key === 'armor') {
+        for (const u of Object.values(d.units)) u.hp = Math.round(u.hp * 1.1);
+      } else p.doctrine.apply(d);
+      for (const e of this.ents) if (e.owner === p.id && e.kind === 'unit' && !e.dead) this.refit(e);
+      for (const e of this.ents) if (e.cargo) for (const v of e.cargo) if (v.owner === p.id) this.refit(v);
+      this.events.push({ type: 'researched', owner: p.id, key, level: lvl });
+    }
+    // recompute a unit's maximum health after research or a promotion, keeping its health percentage
+    refit(u) {
+      const max = Math.round(u.def.hp * (1 + R.VET_HP * u.rank));
+      if (max !== u.maxHp) { u.hp = u.hp / u.maxHp * max; u.maxHp = max; }
     }
     builderFor(pid, sent, x, y) {
       let best = null, bd = 1e9;
@@ -440,6 +532,7 @@
     canPlace(pid, type, tx, ty) {
       const p = this.players[pid], d = p.defs.buildings[type], W = this.W;
       if (d.req && !this.has(pid, d.req)) return 'Requires ' + p.defs.buildings[d.req].name;
+      if (type === 'silo') for (const e of this.ents) if (e.owner === pid && e.type === 'silo' && !e.dead) return 'You can only have one ' + d.name;
       if (tx < 0 || ty < 0 || tx + d.w > W || ty + d.h > this.H) return 'Out of bounds';
       if (type === 'derrick') {
         const s = this.seepAt(tx, ty);
@@ -468,10 +561,14 @@
       u.px = u.x; u.py = u.y;
       if (u.cd > 0) u.cd--;
       if (u.chute > 0) { u.chute--; return; }                  // still under the parachute
-      if (u.def.horde && (this.tick + u.id) % 20 === 0) {      // massed bonus: recount nearby comrades once a second
-        let n = 0;
-        for (const e of this.ents) if (e.owner === u.owner && e.kind === 'unit' && e !== u && !e.dead && e.def.dmg && Math.abs(e.x - u.x) <= R.HORDE_RANGE && Math.abs(e.y - u.y) <= R.HORDE_RANGE) n++;
-        u.massed = n >= R.HORDE_SIZE;
+      if ((this.tick + u.id) % 20 === 0) {                     // once a second
+        if (u.def.horde) {                                     // massed bonus: recount nearby comrades
+          let n = 0;
+          for (const e of this.ents) if (e.owner === u.owner && e.kind === 'unit' && e !== u && !e.dead && e.def.dmg && Math.abs(e.x - u.x) <= R.HORDE_RANGE && Math.abs(e.y - u.y) <= R.HORDE_RANGE) n++;
+          u.massed = n >= R.HORDE_SIZE;
+        }
+        const rg = (u.def.regen || 0) + (u.rank === 2 ? R.VET_REGEN : 0);   // self-repair: Field Workshops, elite rank
+        if (rg && u.hp < u.maxHp) u.hp = Math.min(u.maxHp, u.hp + u.maxHp * rg);
       }
       if (!u.def.air && this.block[(u.y | 0) * this.W + (u.x | 0)]) { const f = this.nearestFree(u.x, u.y); u.x = f.x; u.y = f.y; u.path = null; }
       const o = u.order;
@@ -558,8 +655,9 @@
     }
     acquire(src, range) {
       let best = null, bs = 1e9;
+      const tm = this.teamOf, mine = tm[src.owner];
       for (const e of this.ents) {
-        if (e.owner < 0 || e.owner === src.owner || e.dead) continue;
+        if (e.owner < 0 || tm[e.owner] === mine || e.dead) continue;
         const d = this.dist(src.x, src.y, e);
         if (d > range || !this.canSee(src.owner, e)) continue;
         const s = d + (e.kind === 'building' ? (e.def.dmg ? 0 : 5) : (e.def.dmg ? 0 : 2));
@@ -628,7 +726,8 @@
       const d = src.def;
       src.cd = Math.round(d.cd * TPS);
       src.facing = Math.atan2(t.y - src.y, t.x - src.x);
-      const dmg = src.massed ? d.dmg * d.horde : d.dmg;
+      let dmg = src.massed ? d.dmg * d.horde : d.dmg;
+      if (src.rank) dmg *= 1 + R.VET_DMG * src.rank;
       if (d.dtype === 'bullet' || d.dtype === 'beam') {
         this.events.push({ type: d.dtype, x: src.x, y: src.y, tx: t.x, ty: t.y });
         this.hit(t, dmg, d.dtype, src.owner, src);
@@ -649,16 +748,23 @@
       if (t.dead) return;
       t.hp -= dmg * R.DMG[dtype][t.kind === 'building' ? 'bld' : t.def.armor];
       this.players[t.owner].lastAttack = { x: t.x, y: t.y, tick: this.tick };
-      if (t.hp <= 0) return this.kill(t, owner);
+      if (t.hp <= 0) return this.kill(t, owner, src);
       // idle armed units answer fire, even from attackers they cannot see
       if (src && !src.dead && t.kind === 'unit' && t.def.dmg && t.order.type === 'idle' && !t.target) {
         if (this.canSee(t.owner, src)) { t.target = src.id; t.path = null; }
         else { const f = this.nearestFree(src.x, src.y); t.order = { type: 'amove', x: f.x, y: f.y, tries: 0 }; t.path = null; }
       }
     }
-    kill(t, killer) {
+    kill(t, killer, src) {
       t.dead = true; this.byId.delete(t.id); this.dirty = true; this.anyDead = true;
       const val = t.def.cash + (t.def.oil || 0), vp = this.players[t.owner], isU = t.kind === 'unit';
+      if (t.res) delete vp.busy[t.res.key];
+      // veterancy: the unit that made the kill earns experience worth what it destroyed (half for buildings)
+      if (src && src.kind === 'unit' && !src.dead && src.rank < 2 && this.hostile(src.owner, t.owner)) {
+        src.xp += isU ? val : val * 0.5;
+        const own = src.def.cash + (src.def.oil || 0), rank = src.xp >= own * R.VET_AT[1] ? 2 : src.xp >= own * R.VET_AT[0] ? 1 : 0;
+        if (rank > src.rank) { src.rank = rank; this.refit(src); this.events.push({ type: 'promote', owner: src.owner, x: src.x, y: src.y, rank, name: src.def.name }); }
+      }
       vp.stats.lostValue += val; if (isU) vp.stats.unitsLost++; else vp.stats.bldLost++;
       if (killer >= 0 && killer !== t.owner) {
         const kp = this.players[killer];
@@ -682,8 +788,9 @@
         if (d > s) { pr.x += dx / d * s; pr.y += dy / d * s; keep.push(pr); continue; }
         const src = this.byId.get(pr.src);
         if (pr.splash) {
+          const tm = this.teamOf, mine = tm[pr.owner];
           for (const e of this.ents) {
-            if (e.owner < 0 || e.owner === pr.owner || e.dead) continue;
+            if (e.owner < 0 || tm[e.owner] === mine || e.dead) continue;
             const dd = this.dist(pr.tx, pr.ty, e);
             if (dd <= pr.splash) this.hit(e, pr.dmg * (1 - 0.5 * dd / pr.splash), pr.dtype, pr.owner, src);
           }
@@ -691,6 +798,26 @@
         this.events.push({ type: 'boom', x: pr.tx, y: pr.ty, size: pr.splash ? pr.splash : 0.35, look: pr.look });
       }
       this.proj = keep;
+    }
+    // Superweapon strikes in flight: after the warning time, deliver the blasts one by one.
+    updateStrikes() {
+      if (!this.strikes.length) return;
+      const tm = this.teamOf;
+      for (const st of this.strikes) {
+        if (st.t > 0) { st.t--; continue; }
+        if (st.wait > 0) { st.wait--; continue; }
+        const c = st.cfg;
+        st.wait = c.gap - 1;
+        const k = st.k++, a = k * 2.39996, d = c.spread * Math.sqrt((k + 0.5) / c.n);
+        const x = st.x + Math.cos(a) * d, y = st.y + Math.sin(a) * d;
+        for (const e of this.ents) {
+          if (e.owner < 0 || tm[e.owner] === tm[st.owner] || e.dead) continue;
+          const dd = this.dist(x, y, e);
+          if (dd <= c.radius) this.hit(e, c.dmg * (1 - 0.5 * dd / c.radius), c.dtype, st.owner, null);
+        }
+        this.events.push({ type: 'blast', x, y, size: c.radius, look: c.look });
+      }
+      this.strikes = this.strikes.filter(st => st.k < st.cfg.n);
     }
 
     // ---------- buildings ----------
@@ -700,10 +827,12 @@
         if (b.work < this.tick - 1) return;      // no worker on site: construction waits
         const n = d.time * TPS;
         b.progress += 1 / n; b.hp = Math.min(b.maxHp, b.hp + b.maxHp * 0.9 / n);
-        if (b.progress >= 1) { b.progress = 1; b.built = true; this.dirty = true; this.events.push({ type: 'built', owner: b.owner, name: d.name, x: b.x, y: b.y }); }
+        if (b.progress >= 1) { b.progress = 1; b.built = true; this.dirty = true; this.events.push({ type: 'built', owner: b.owner, name: d.name, x: b.x, y: b.y, btype: b.type }); }
         return;
       }
       if (b.queue.length && --b.queue[0].left <= 0) this.spawn(b, b.queue.shift().type);
+      if (b.res && --b.res.left <= 0) { const k = b.res.key; b.res = null; this.applyResearch(p, k); }
+      if (d.charge && b.charge < d.charge * TPS && ++b.charge >= d.charge * TPS) this.events.push({ type: 'charged', owner: b.owner, name: p.strike.name });
       if (d.oilRate && this.tick % TPS === 0) { p.oil += d.oilRate; p.stats.oil += d.oilRate; }
       if (d.dmg) {
         if (b.cd > 0) b.cd--;
@@ -810,8 +939,12 @@
         h = (Math.imul(h, 31) + Math.round(e.y * 1000)) | 0;
         h = (Math.imul(h, 31) + Math.round((e.hp || e.amount || 0) * 10)) | 0;
         if (e.cargo) h = (Math.imul(h, 31) + e.cargo.length) | 0;
+        if (e.rank) h = (Math.imul(h, 31) + e.rank) | 0;
       }
-      for (const p of this.players) h = (Math.imul(h, 31) + Math.round(p.cash * 10) + Math.round(p.oil * 10)) | 0;
+      for (const p of this.players) {
+        h = (Math.imul(h, 31) + Math.round(p.cash * 10) + Math.round(p.oil * 10)) | 0;
+        h = (Math.imul(h, 31) + p.research.weapons + p.research.armor * 3 + p.research.doctrine * 9) | 0;
+      }
       return h >>> 0;
     }
 
@@ -829,16 +962,20 @@
       }
       this.separate(units);
       this.updateProjectiles();
+      this.updateStrikes();
       if (this.anyDead) { this.ents = this.ents.filter(e => !e.dead); this.anyDead = false; }
       if (this.tick % 4 === 0) this.updateFog();
       if (this.dirty) this.recalc();
-      if (this.tick % 10 === 0) {
-        let alive = 0, last = -1;
+      // A player with no buildings left is out. The match ends when one team remains;
+      // winner is that team's number (for a duel with default teams, the player's index).
+      if (this.tick % 10 === 0 || this.cmdOut) {
+        this.cmdOut = false;
+        const teams = new Set();
         for (const p of this.players) {
-          if (p.alive && p.nb === 0) p.alive = false;
-          if (p.alive) { alive++; last = p.id; }
+          if (p.alive && p.nb === 0) this.eliminate(p);
+          if (p.alive) teams.add(p.team);
         }
-        if (alive <= 1 && this.players.length > 1) this.winner = last;
+        if (teams.size <= 1 && this.players.length > 1) this.winner = teams.size ? teams.values().next().value : this.players[0].team;
       }
     }
   }

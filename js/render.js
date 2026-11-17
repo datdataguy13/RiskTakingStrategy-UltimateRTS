@@ -20,7 +20,7 @@
       this.cv = canvas; this.g = canvas.getContext('2d');
       this.mm = mm; this.mg = mm.getContext('2d');
       this.sim = sim; this.me = me;
-      this.cam = { x: 0, y: 0 }; this.fx = []; this.pings = []; this.time = 0; this.fogV = -1; this.frame = 0;
+      this.cam = { x: 0, y: 0 }; this.fx = []; this.fxTop = []; this.pings = []; this.beacons = []; this.marks = []; this.time = 0; this.fogV = -1; this.frame = 0;
       this.buildTerrain();
       this.fogCv = document.createElement('canvas'); this.fogCv.width = sim.W; this.fogCv.height = sim.H;
       this.fogG = this.fogCv.getContext('2d'); this.fogImg = this.fogG.createImageData(sim.W, sim.H);
@@ -160,6 +160,21 @@
           break;
         case 'boom': if (ev.look === 'flame') { if (seen(ev.x, ev.y)) this.fx.push({ k: 'burn', x: ev.x, y: ev.y, size: ev.size, t: 0, life: 0.6 }); break; }
           if (seen(ev.x, ev.y)) { this.fx.push({ k: 'boom', x: ev.x, y: ev.y, size: ev.size, t: 0, life: 0.35 }); if (ev.size > 0.5) { this.scorch(ev.x, ev.y, ev.size * 0.6); if (this.onScreen(ev.x, ev.y)) R.Snd.play('boom'); } } break;
+        case 'strike':      // superweapon inbound: everyone sees where it will land
+          this.marks.push({ x: ev.x, y: ev.y, r: ev.radius, t: 0, life: R.STRIKE_WARN / R.TPS + 0.3, col: s.players[ev.owner].color });
+          break;
+        case 'blast': {     // superweapon impact: drawn above the fog, so the attacker sees it land too
+          const big = ev.look === 'nuke' || ev.look === 'beam';
+          this.fxTop.push({ k: ev.look === 'flame' ? 'burn' : 'boom', x: ev.x, y: ev.y, size: ev.size * (big ? 1.25 : 1), t: 0, life: big ? 1.4 : ev.look === 'flame' ? 0.9 : 0.55 });
+          if (ev.look === 'beam') this.fxTop.push({ k: 'lance', x: ev.x, y: ev.y, t: 0, life: 0.7 });
+          if (big) this.fxTop.push({ k: 'ring', x: ev.x, y: ev.y, size: ev.size * 1.6, t: 0, life: 0.9 });
+          this.scorch(ev.x, ev.y, ev.size * (ev.look === 'flame' ? 0.5 : 0.9));
+          if (this.onScreen(ev.x, ev.y, 400)) R.Snd.play(big ? 'nuke' : ev.look === 'flame' ? 'flame' : 'boom');
+          break;
+        }
+        case 'promote':
+          if (ev.owner === this.me) { this.fx.push({ k: 'promo', x: ev.x, y: ev.y, t: 0, life: 0.9 }); if (this.onScreen(ev.x, ev.y)) R.Snd.play('promo'); }
+          break;
         case 'death':
           if (seen(ev.x, ev.y)) {
             this.fx.push({ k: 'boom', x: ev.x, y: ev.y, size: ev.size, t: 0, life: ev.bld ? 0.8 : 0.5 });
@@ -170,6 +185,7 @@
       }
     }
     ping(x, y, col) { this.pings.push({ x, y, col, t: 0 }); }
+    beacon(x, y, col) { this.beacons.push({ x, y, col, t: 0 }); }     // a teammate's map ping: lingers, and shows on the minimap
 
     // ----- drawing helpers -----
     // pl = { color (team), hull (faction camo), emblem }
@@ -213,6 +229,41 @@
             for (let k = 0; k < 4; k++) { const a = ph * 1.7 + k * 1.9, d = 3 + ((ph * 2 + k * 2.3) % 6); g.fillRect(r * 1.6 + Math.cos(a) * d, Math.sin(a) * d, 1.5, 1.5); }
           }
           break;
+        case 'sniper':      // prone marksman: long rifle, ghillie hood
+          g.fillStyle = gun; g.fillRect(r * 0.1, -1, r * 2.3, 2); g.fillRect(r * 0.9, -2.2, r * 0.5, 4.4);
+          g.fillStyle = col; g.beginPath(); g.arc(0, 0, r, 0, 7); g.fill(); g.stroke();
+          g.fillStyle = '#4d5a38'; g.beginPath(); g.arc(-r * 0.1, 0, r * 0.62, 0, 7); g.fill();
+          g.fillStyle = '#6f7f4a'; for (let k = 0; k < 5; k++) g.fillRect(Math.cos(k * 1.3) * r * 0.4 - 1.5, Math.sin(k * 1.3) * r * 0.4 - 1.5, 3, 3);
+          break;
+        case 'mortar':      // crew with a stubby tube on a base plate
+          g.fillStyle = col; g.beginPath(); g.arc(-r * 0.3, 0, r, 0, 7); g.fill(); g.stroke();
+          g.fillStyle = hull; g.beginPath(); g.arc(-r * 0.4, 0, r * 0.5, 0, 7); g.fill();
+          g.fillStyle = '#2a2d31'; g.beginPath(); g.arc(r * 0.9, 0, r * 0.62, 0, 7); g.fill(); g.stroke();
+          g.fillStyle = gun; g.fillRect(r * 0.7, -2.5, r * 1.1, 5); g.fillStyle = '#0a0a0a'; g.beginPath(); g.arc(r * 1.8, 0, 2, 0, 7); g.fill();
+          break;
+        case 'gatling':     // light tracked hull, twin rotary cannons
+          tracks(r * 1.2, r * 0.95);
+          g.fillStyle = hull; g.fillRect(-r * 1.1, -r * 0.66, r * 2.2, r * 1.32); g.strokeRect(-r * 1.1, -r * 0.66, r * 2.2, r * 1.32);
+          g.fillStyle = gun;
+          for (const sy of [-1, 1]) { g.fillRect(0, sy * r * 0.34 - 2.5, r * 1.5, 5); g.fillStyle = '#5d636b'; g.fillRect(r * 1.5 - 3, sy * r * 0.34 - 3, 3, 6); g.fillStyle = gun; }
+          g.fillStyle = col; g.fillRect(-r * 0.7, -r * 0.5, r * 0.95, r); g.strokeRect(-r * 0.7, -r * 0.5, r * 0.95, r);
+          break;
+        case 'gunship': {   // attack helicopter: narrow body, stub wings with pods, chin gun
+          g.fillStyle = hull; g.beginPath(); g.moveTo(-r * 0.4, -2.5); g.lineTo(-r * 2.0, -1.2); g.lineTo(-r * 2.0, 1.2); g.lineTo(-r * 0.4, 2.5); g.closePath(); g.fill(); g.stroke();
+          g.fillRect(-r * 2.1, -r * 0.45, 3, r * 0.9); g.strokeRect(-r * 2.1, -r * 0.45, 3, r * 0.9);
+          g.fillStyle = col; g.fillRect(-r * 0.35, -r * 1.0, r * 0.55, r * 2.0); g.strokeRect(-r * 0.35, -r * 1.0, r * 0.55, r * 2.0);
+          g.fillStyle = '#2a2d31'; for (const sy of [-1, 1]) g.fillRect(-r * 0.25, sy * r * 0.95 - 2.5, r * 0.7, 5);
+          g.fillStyle = hull; g.beginPath(); g.ellipse(r * 0.2, 0, r * 1.2, r * 0.42, 0, 0, 7); g.fill(); g.stroke();
+          g.fillStyle = 'rgba(170,215,255,.75)'; g.beginPath(); g.ellipse(r * 0.7, 0, r * 0.4, r * 0.26, 0, 0, 7); g.fill();
+          g.fillStyle = gun; g.fillRect(r * 1.2, -1.2, r * 0.6, 2.4);
+          g.save(); g.rotate(this.time * 24 + u.id);
+          g.fillStyle = 'rgba(20,22,26,.16)'; g.beginPath(); g.arc(0, 0, r * 1.75, 0, 7); g.fill();
+          g.strokeStyle = 'rgba(20,22,26,.8)'; g.lineWidth = 2; g.beginPath();
+          for (let k = 0; k < 5; k++) { g.moveTo(0, 0); g.lineTo(Math.cos(k * 1.2566) * r * 1.75, Math.sin(k * 1.2566) * r * 1.75); }
+          g.stroke(); g.restore();
+          g.fillStyle = '#16181b'; g.beginPath(); g.arc(0, 0, 2.5, 0, 7); g.fill();
+          break;
+        }
         case 'rifle':
           g.fillStyle = gun; g.fillRect(r * 0.2, -1.5, r * 1.4, 3);
           g.fillStyle = col; g.beginPath(); g.arc(0, 0, r, 0, 7); g.fill(); g.stroke();
@@ -387,6 +438,19 @@
           g.fillStyle = `rgba(160,235,255,${b.built ? 0.65 + 0.3 * Math.sin(this.time * 3 + b.id) : 0.3})`; g.beginPath(); g.arc(cx, cy, 13, 0, 7); g.fill();
           g.fillStyle = 'rgba(255,255,255,.5)'; g.beginPath(); g.arc(cx - 4, cy - 4, 4, 0, 7); g.fill();
           break;
+        case 'silo': {      // blast doors around a launch shaft; hazard stripes; the core glows as it charges
+          const ch = b.built && b.def.charge ? Math.min(1, (b.charge || 0) / (b.def.charge * R.TPS)) : 0, ready = ch >= 1;
+          g.fillStyle = '#2b2f35'; g.fillRect(x + 6, y + 6, w - 12, h - 12); g.strokeRect(x + 6, y + 6, w - 12, h - 12);
+          g.fillStyle = '#f2c230'; for (let k = 0; k < 7; k++) { g.fillRect(x + 9 + k * 12, y + 8, 6, 4); g.fillRect(x + 9 + k * 12, y + h - 12, 6, 4); }
+          g.fillStyle = col; g.beginPath(); g.arc(cx, cy, 30, 0, 7); g.fill(); g.stroke();
+          g.fillStyle = '#16181b'; g.beginPath(); g.arc(cx, cy, 23, 0, 7); g.fill();
+          g.fillStyle = '#3a3f46'; g.beginPath(); g.moveTo(cx, cy); g.arc(cx, cy, 23, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ch); g.closePath(); g.fill();
+          const pulse = ready ? 0.65 + 0.35 * Math.sin(this.time * 7 + b.id) : 0.25 + 0.5 * ch;
+          g.fillStyle = `rgba(255,${ready ? 90 : 190},60,${pulse})`; g.beginPath(); g.arc(cx, cy, 13, 0, 7); g.fill();
+          g.fillStyle = '#e8eaee'; g.beginPath(); g.moveTo(cx, cy - 9); g.lineTo(cx + 5, cy + 6); g.lineTo(cx - 5, cy + 6); g.closePath(); g.fill(); g.stroke();
+          this.emblem(g, pl.emblem, x + 17, y + 17, 7);
+          break;
+        }
         case 'turret':
           g.fillStyle = '#22252a'; g.beginPath(); g.arc(cx, cy, 13, 0, 7); g.fill();
           g.translate(cx, cy); g.rotate(b.facing);
@@ -451,6 +515,44 @@
       g.fillRect(x, y, Math.max(0, w * f), 4);
     }
 
+    // draw a list of timed effects and drop the finished ones
+    drawFx(g, list, dt) {
+      let n = 0;
+      for (const f of list) {
+        f.t += dt;
+        if (f.t >= f.life) continue;
+        list[n++] = f;
+        const k = f.t / f.life;
+        if (f.k === 'tracer') {
+          g.strokeStyle = `rgba(255,236,160,${0.9 * (1 - k)})`; g.lineWidth = 1.5;
+          g.beginPath(); g.moveTo(f.x * T, f.y * T); g.lineTo(f.tx * T, f.ty * T); g.stroke();
+        } else if (f.k === 'beam') {
+          g.strokeStyle = `rgba(140,230,255,${0.5 * (1 - k)})`; g.lineWidth = 7; g.beginPath(); g.moveTo(f.x * T, f.y * T); g.lineTo(f.tx * T, f.ty * T); g.stroke();
+          g.strokeStyle = `rgba(255,255,255,${1 - k})`; g.lineWidth = 2; g.stroke();
+        } else if (f.k === 'burn') {
+          const r = f.size * T * (0.55 + 0.45 * k);
+          g.fillStyle = `rgba(255,${150 - 70 * k | 0},40,${0.5 * (1 - k)})`; g.beginPath(); g.arc(f.x * T, f.y * T, r, 0, 7); g.fill();
+          g.fillStyle = `rgba(255,226,122,${0.55 * (1 - k)})`; g.beginPath(); g.arc(f.x * T, f.y * T - 5 * k, r * 0.45, 0, 7); g.fill();
+        } else if (f.k === 'ring') {          // shockwave
+          g.strokeStyle = `rgba(255,240,200,${0.8 * (1 - k)})`; g.lineWidth = 6 * (1 - k) + 1;
+          g.beginPath(); g.arc(f.x * T, f.y * T, f.size * T * (0.2 + 0.8 * k), 0, 7); g.stroke();
+        } else if (f.k === 'lance') {         // beam from the sky
+          g.fillStyle = `rgba(150,225,255,${0.55 * (1 - k)})`; g.fillRect(f.x * T - 22 * (1 - k), f.y * T - 2400, 44 * (1 - k), 2400);
+          g.fillStyle = `rgba(255,255,255,${0.9 * (1 - k)})`; g.fillRect(f.x * T - 7 * (1 - k), f.y * T - 2400, 14 * (1 - k), 2400);
+        } else if (f.k === 'promo') {         // promotion: rising gold chevrons
+          g.strokeStyle = `rgba(247,208,56,${1 - k})`; g.lineWidth = 2.5;
+          for (let i = 0; i < 2; i++) { const y = f.y * T - 18 - 26 * k - i * 7; g.beginPath(); g.moveTo(f.x * T - 7, y); g.lineTo(f.x * T, y - 6); g.lineTo(f.x * T + 7, y); g.stroke(); }
+        } else if (f.k === 'flash') {
+          g.fillStyle = `rgba(255,220,130,${1 - k})`; g.beginPath(); g.arc(f.x * T, f.y * T, 9, 0, 7); g.fill();
+        } else {
+          const r = f.size * T * (0.4 + 0.8 * k);
+          g.fillStyle = `rgba(255,${200 - 120 * k | 0},${90 - 80 * k | 0},${0.85 * (1 - k)})`; g.beginPath(); g.arc(f.x * T, f.y * T, r, 0, 7); g.fill();
+          g.fillStyle = `rgba(40,36,32,${0.5 * (1 - k)})`; g.beginPath(); g.arc(f.x * T + 3, f.y * T - 4 - 14 * k, r * 0.7, 0, 7); g.fill();
+        }
+      }
+      list.length = n;
+    }
+
     draw(alpha, ui, dt) {
       const g = this.g, s = this.sim, me = s.players[this.me], W = s.W, cam = this.cam;
       this.time += dt; this.frame++;
@@ -493,7 +595,7 @@
       for (const u of units) {
         u._x = (u.px + (u.x - u.px) * alpha) * T; u._y = (u.py + (u.y - u.py) * alpha) * T;
         if (sel.has(u.id)) {
-          g.strokeStyle = u.owner === this.me ? '#6dff8a' : '#ff5a5a'; g.lineWidth = 1.5;
+          g.strokeStyle = u.owner === this.me ? '#6dff8a' : s.hostile(this.me, u.owner) ? '#ff5a5a' : '#6cb6ff'; g.lineWidth = 1.5;
           g.beginPath(); g.ellipse(u._x, u._y + 2, u.def.r * T + 5, u.def.r * T + 3, 0, 0, 7); g.stroke();
         }
       }
@@ -517,32 +619,9 @@
         g.restore();
       }
 
-      // effects
-      const fx = this.fx; let n = 0;
-      for (const f of fx) {
-        f.t += dt;
-        if (f.t >= f.life) continue;
-        fx[n++] = f;
-        const k = f.t / f.life;
-        if (f.k === 'tracer') {
-          g.strokeStyle = `rgba(255,236,160,${0.9 * (1 - k)})`; g.lineWidth = 1.5;
-          g.beginPath(); g.moveTo(f.x * T, f.y * T); g.lineTo(f.tx * T, f.ty * T); g.stroke();
-        } else if (f.k === 'beam') {
-          g.strokeStyle = `rgba(140,230,255,${0.5 * (1 - k)})`; g.lineWidth = 7; g.beginPath(); g.moveTo(f.x * T, f.y * T); g.lineTo(f.tx * T, f.ty * T); g.stroke();
-          g.strokeStyle = `rgba(255,255,255,${1 - k})`; g.lineWidth = 2; g.stroke();
-        } else if (f.k === 'burn') {
-          const r = f.size * T * (0.55 + 0.45 * k);
-          g.fillStyle = `rgba(255,${150 - 70 * k | 0},40,${0.5 * (1 - k)})`; g.beginPath(); g.arc(f.x * T, f.y * T, r, 0, 7); g.fill();
-          g.fillStyle = `rgba(255,226,122,${0.55 * (1 - k)})`; g.beginPath(); g.arc(f.x * T, f.y * T - 5 * k, r * 0.45, 0, 7); g.fill();
-        } else if (f.k === 'flash') {
-          g.fillStyle = `rgba(255,220,130,${1 - k})`; g.beginPath(); g.arc(f.x * T, f.y * T, 9, 0, 7); g.fill();
-        } else {
-          const r = f.size * T * (0.4 + 0.8 * k);
-          g.fillStyle = `rgba(255,${200 - 120 * k | 0},${90 - 80 * k | 0},${0.85 * (1 - k)})`; g.beginPath(); g.arc(f.x * T, f.y * T, r, 0, 7); g.fill();
-          g.fillStyle = `rgba(40,36,32,${0.5 * (1 - k)})`; g.beginPath(); g.arc(f.x * T + 3, f.y * T - 4 - 14 * k, r * 0.7, 0, 7); g.fill();
-        }
-      }
-      fx.length = n;
+      // effects seen only where you have vision; superweapon blasts are drawn later, above the fog
+      this.drawFx(g, this.fx, dt);
+      let n = 0;
 
       // fog of war
       if (this.fogV !== s.fogV) {
@@ -558,7 +637,7 @@
       for (const b of blds) {
         const selected = sel.has(b.id);
         if (selected) {
-          g.strokeStyle = b.owner === this.me ? '#6dff8a' : '#ff5a5a'; g.lineWidth = 2; g.strokeRect(b.tx * T, b.ty * T, b.w * T, b.h * T);
+          g.strokeStyle = b.owner === this.me ? '#6dff8a' : s.hostile(this.me, b.owner) ? '#ff5a5a' : '#6cb6ff'; g.lineWidth = 2; g.strokeRect(b.tx * T, b.ty * T, b.w * T, b.h * T);
           if (b.rally && b.owner === this.me) {
             g.strokeStyle = 'rgba(109,255,138,.7)'; g.lineWidth = 1.5; g.setLineDash([6, 5]);
             g.beginPath(); g.moveTo(b.x * T, b.y * T); g.lineTo(b.rally.x * T, b.rally.y * T); g.stroke(); g.setLineDash([]);
@@ -576,6 +655,14 @@
         g.strokeStyle = '#0e1013'; g.lineWidth = 3.5; g.beginPath(); g.moveTo(x - 4, y); g.lineTo(x, y - 4); g.lineTo(x + 4, y); g.stroke();
         g.strokeStyle = '#f7d038'; g.lineWidth = 1.8; g.stroke();
       }
+      for (const u of units) if (u.rank) {        // veterancy: one silver chevron for Veteran, two gold for Elite
+        const x = u._x + u.def.r * T + 2, y0 = u._y - u.def.r * T + 2;
+        for (let i = 0; i < u.rank; i++) {
+          const y = y0 + i * 4.5;
+          g.strokeStyle = '#0e1013'; g.lineWidth = 3; g.beginPath(); g.moveTo(x - 3.5, y + 3); g.lineTo(x, y); g.lineTo(x + 3.5, y + 3); g.stroke();
+          g.strokeStyle = u.rank === 2 ? '#f7d038' : '#dfe5ea'; g.lineWidth = 1.5; g.stroke();
+        }
+      }
       for (const u of units) if (sel.has(u.id) || u.hp < u.maxHp) { const w = u.def.r * T * 2 + 6; this.bar(g, u._x - w / 2, u._y - u.def.r * T - 10, w, u.hp / u.maxHp); }
       for (const id of sel) {
         const e = s.byId.get(id);
@@ -587,6 +674,36 @@
         g.fillRect(gh.tx * T, gh.ty * T, d.w * T, d.h * T);
         g.strokeStyle = gh.ok ? '#6dff8a' : '#ff5a5a'; g.lineWidth = 2; g.strokeRect(gh.tx * T, gh.ty * T, d.w * T, d.h * T);
         if (d.range) { g.strokeStyle = 'rgba(255,255,255,.35)'; g.lineWidth = 1; g.beginPath(); g.arc((gh.tx + d.w / 2) * T, (gh.ty + d.h / 2) * T, d.range * T, 0, 7); g.stroke(); }
+      }
+      this.drawFx(g, this.fxTop, dt);             // superweapon blasts: everyone sees them, fog or not
+      n = 0;
+      for (const m of this.marks) {               // superweapon target: closing reticle and countdown
+        m.t += dt; if (m.t >= m.life) continue; this.marks[n++] = m;
+        const k = Math.min(1, m.t / (m.life - 0.3)), px = m.x * T, py = m.y * T, rr = m.r * T, fl = 0.55 + 0.45 * Math.sin(this.time * 14);
+        g.fillStyle = `rgba(255,40,30,${0.10 + 0.12 * fl})`; g.beginPath(); g.arc(px, py, rr, 0, 7); g.fill();
+        g.strokeStyle = `rgba(255,70,50,${0.6 + 0.4 * fl})`; g.lineWidth = 3; g.setLineDash([14, 9]); g.beginPath(); g.arc(px, py, rr, 0, 7); g.stroke(); g.setLineDash([]);
+        g.lineWidth = 2; g.beginPath(); g.arc(px, py, rr * (1 - k) + 6, 0, 7); g.stroke();
+        g.beginPath(); g.moveTo(px - rr, py); g.lineTo(px + rr, py); g.moveTo(px, py - rr); g.lineTo(px, py + rr); g.globalAlpha = 0.35; g.stroke(); g.globalAlpha = 1;
+        g.fillStyle = m.col; g.strokeStyle = '#0e1013'; g.lineWidth = 3; g.font = '700 15px sans-serif'; g.textAlign = 'center';
+        const left = Math.max(0, m.life - 0.3 - m.t).toFixed(1);
+        g.strokeText(left, px, py - rr - 8); g.fillText(left, px, py - rr - 8);
+      }
+      this.marks.length = n;
+      n = 0;
+      for (const b of this.beacons) {             // teammates' map pings
+        b.t += dt; if (b.t >= 4) continue; this.beacons[n++] = b;
+        const px = b.x * T, py = b.y * T, k = (b.t * 1.4) % 1;
+        g.globalAlpha = Math.min(1, 4 - b.t);
+        g.strokeStyle = '#0e1013'; g.lineWidth = 5; g.beginPath(); g.arc(px, py, 8 + 30 * k, 0, 7); g.stroke();
+        g.strokeStyle = b.col; g.lineWidth = 2.5; g.stroke();
+        g.fillStyle = b.col; g.strokeStyle = '#0e1013'; g.lineWidth = 1.5;
+        g.beginPath(); g.moveTo(px, py); g.lineTo(px - 7, py - 20); g.lineTo(px + 7, py - 20); g.closePath(); g.fill(); g.stroke();
+        g.globalAlpha = 1;
+      }
+      this.beacons.length = n;
+      if (ui.aim) {                               // choosing where to launch
+        g.fillStyle = 'rgba(255,60,40,.14)'; g.strokeStyle = '#ff5a4a'; g.lineWidth = 2;
+        g.beginPath(); g.arc(ui.aim.x * T, ui.aim.y * T, ui.aim.r * T, 0, 7); g.fill(); g.stroke();
       }
       n = 0;
       for (const p of this.pings) {
@@ -622,6 +739,11 @@
         g.strokeStyle = '#ff4b4b'; g.lineWidth = 2;
         g.beginPath(); g.arc(ui.alert.x * k, ui.alert.y * k, 4 + (this.time * 20) % 12, 0, 7); g.stroke();
       }
+      for (const m of this.marks) { g.strokeStyle = '#ff4b4b'; g.lineWidth = 2; g.beginPath(); g.arc(m.x * k, m.y * k, Math.max(4, m.r * k), 0, 7); g.stroke(); }
+      for (const b of this.beacons) {
+        g.strokeStyle = '#0e1013'; g.lineWidth = 4; g.beginPath(); g.arc(b.x * k, b.y * k, 3 + (this.time * 14) % 9, 0, 7); g.stroke();
+        g.strokeStyle = b.col; g.lineWidth = 2; g.stroke();
+      }
       g.strokeStyle = '#fff'; g.lineWidth = 1;
       g.strokeRect(this.cam.x / T * k + 0.5, this.cam.y / T * k + 0.5, this.vw / T * k, (this.vh - 200) / T * k);
     }
@@ -649,7 +771,7 @@
       } else {
         const bd = d.buildings[type], sc = 60 / (Math.max(bd.w, bd.h) * T);
         g.translate(2 + (60 - bd.w * T * sc) / 2, 1 + (60 - bd.h * T * sc) / 2); g.scale(sc, sc);
-        rd.drawBuilding(g, { type, def: bd, tx: 0, ty: 0, w: bd.w, h: bd.h, built: true, progress: 1, facing: -0.6, id: 1 }, pl);
+        rd.drawBuilding(g, { type, def: bd, tx: 0, ty: 0, w: bd.w, h: bd.h, built: true, progress: 1, facing: -0.6, id: 1, charge: 1e9 }, pl);
       }
     });
     iconCache.set(key, url);

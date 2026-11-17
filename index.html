@@ -14,11 +14,17 @@
   <span class="res oil" title="Oil — pumped by Derricks on oil seeps">Oil <b id="r-oil">0</b></span>
   <span class="res food" title="Food — used / available. Build Farms for more.">Food <b id="r-food">0 / 0</b></span>
   <span class="spacer"></span>
+  <span id="rp" class="hidden"><button data-s="1" class="on">1×</button><button data-s="2">2×</button><button data-s="4">4×</button><button data-s="8">8×</button><button id="rp-view">Viewing</button></span>
   <span id="clock">0:00</span>
   <button id="btn-pause">Pause (P)</button>
 </div>
 <div id="msg"></div>
 <div id="tip" class="hidden"></div>
+<div id="netwait" class="hidden"></div>
+<div id="chat" class="ingame">
+  <div id="chat-log"></div>
+  <div id="chat-row" class="hidden"><button id="chat-scope">All</button><input id="chat-in" maxlength="200" placeholder="Message — Enter to send, Esc to cancel" autocomplete="off"></div>
+</div>
 <div id="hud" class="ingame">
   <canvas id="minimap" width="216" height="216"></canvas>
   <div id="info"></div>
@@ -33,8 +39,12 @@
     <div id="factions"></div>
     <h2>Battlefield</h2>
     <div id="themes" class="seg"></div>
-    <div id="modes" class="tabs"><button data-m="sp">vs Computer</button><button data-m="mp">Multiplayer</button></div>
+    <div id="modes" class="tabs"><button data-m="sp">vs Computer</button><button data-m="mp">Multiplayer</button><button data-m="rp">Replays</button></div>
     <div id="pane-sp">
+      <div id="matches" class="seg">
+        <button data-k="duel">Duel</button><button data-k="ally">2 v 2 with an ally</button><button data-k="ffa">4-way free-for-all</button>
+      </div>
+      <br>
       <div id="diffs" class="seg">
         <button data-d="easy">Easy</button><button data-d="normal">Normal</button><button data-d="hard">Hard</button>
       </div>
@@ -43,6 +53,7 @@
     </div>
     <div id="pane-mp" class="hidden">
       <div id="mp-entry">
+        <div class="joinrow"><span class="dim">Your name</span><input id="mp-name" maxlength="16" placeholder="Player" autocomplete="off" spellcheck="false"></div>
         <button id="mp-host" class="primary">Host a game</button>
         <div class="joinrow"><span class="dim">or join with a code</span><input id="mp-code" maxlength="4" placeholder="ABCD" autocomplete="off" spellcheck="false"><button id="mp-join">Join</button></div>
       </div>
@@ -50,11 +61,18 @@
         <p class="dim">Game code</p>
         <div id="room-code"></div>
         <div id="room-players"></div>
+        <button id="mp-addai">+ Add a computer player</button>
         <p id="room-note" class="dim"></p>
         <button id="mp-start" class="primary">Start battle</button>
         <button id="mp-leave">Leave game</button>
       </div>
       <p id="mp-status" class="dim"></p>
+    </div>
+    <div id="pane-rp" class="hidden">
+      <div id="rp-list"></div>
+      <button id="rp-load">Load a replay file…</button>
+      <input id="rp-file" type="file" accept=".json,application/json" class="hidden">
+      <p id="rp-status" class="dim"></p>
     </div>
     <div class="help">
       <div><b>Select</b> click or drag · double-click selects a unit type</div>
@@ -67,6 +85,10 @@
       <div><b>Camera</b> arrow keys, screen edges, minimap</div>
       <div><b>Sound</b> M cycles all / effects only / off</div>
       <div><b>Groups</b> Ctrl+1–9 to save, 1–9 to recall</div>
+      <div><b>Research</b> select a Tech Lab to buy upgrades</div>
+      <div><b>Superweapon</b> build it, wait for the charge, L then click</div>
+      <div><b>Chat</b> Enter (multiplayer) · Tab switches allies / all</div>
+      <div><b>Map ping</b> Alt+click the map or minimap</div>
     </div>
   </div>
 </div>
@@ -85,6 +107,8 @@
     <h1 id="end-title">Victory</h1>
     <div id="end-body"></div>
     <button id="again" class="primary">Play again</button>
+    <button id="watch">Watch the replay</button>
+    <button id="save">Save the replay to a file</button>
     <button id="to-menu">Main menu</button>
   </div>
 </div>
