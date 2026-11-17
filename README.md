@@ -24,6 +24,9 @@ No install and no build step. It is plain HTML, CSS and JavaScript.
 | Select | click or drag; double-click selects all units of that type |
 | Order | right-click to move, attack or mine |
 | Attack-move | `A`, then click |
+| Build | pick a structure, click the map; a Worker walks over and builds it |
+| Repair | right-click a damaged building with Workers selected (or `E`, then click) |
+| Rally point | select a production building and right-click the map (or `L`, then click) |
 | Camera | arrow keys, screen edges, minimap |
 | Control groups | `Ctrl+1–9` to save, `1–9` to recall |
 | Sound | `M` cycles all / effects only / off |

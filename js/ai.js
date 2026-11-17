@@ -99,6 +99,16 @@
         if (cash >= d.cash && oil >= (d.oil || 0)) { this.cmd({ type: 'build', btype: type, tx: s.tx, ty: s.ty }); cash -= d.cash; oil -= d.oil || 0; }
         else reserve = d.cash;
       };
+      // a site whose builder died or was pulled away needs a new one; damaged buildings get mended in quiet moments
+      const freeWorker = b => {
+        let best = null, bd = 1e9;
+        for (const w of workers) if (w.order.type !== 'build') { const d = Math.hypot(w.x - b.x, w.y - b.y); if (d < bd) { bd = d; best = w; } }
+        return best;
+      };
+      const tended = b => workers.some(w => w.order.type === 'build' && (w.order.b === b.id || w.order.q.includes(b.id)));
+      const needy = pending.find(b => !tended(b)) || (!threat && cash > 150 && blds.find(b => b.built && b.hp < b.maxHp * 0.7 && !tended(b)));
+      const helper = needy && freeWorker(needy);
+      if (helper) this.cmd({ type: 'repair', ids: [helper.id], target: needy.id });
       if (hqs.length && pending.length < 2) {
         const ore = sim.nearestOre(home.x, home.y, 999);
         const oreFar = ore && hqs.every(h => Math.hypot(h.x - ore.x, h.y - ore.y) > 14);

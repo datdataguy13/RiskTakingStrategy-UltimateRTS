@@ -91,13 +91,16 @@
         items.push({ act: 'train:' + t, icon: R.icon(p.faction, t, p.color), name: d.name, key: d.key, cost: costOf(d), lock: need, poor: p.cash < d.cash || p.oil < d.oil,
           tip: `${d.desc}${d.dmg ? `\nHP ${d.hp} · Damage ${d.dmg}${d.volley ? ' ×' + d.volley : ''} · Range ${d.range}` : `\nHP ${d.hp}`} · Food ${d.supply * (d.count || 1)}${need ? `\nRequires ${p.defs.buildings[d.req].name}` : ''}` });
       }
-      items.push({ act: 'cancel', name: 'Cancel', key: 'x', cost: 'last in queue', lock: !one.queue.length, tip: 'Cancel the last queued unit for a full refund.\nRight-click the map to set a rally point.' });
+      items.push({ act: 'rally', name: 'Rally Point', key: 'l', cost: 'then click', on: this.mode === 'rally', tip: 'New units gather where you click. Click an ore deposit to send new Workers straight to mining.\nShortcut: right-click the map with this building selected.' });
+      items.push({ act: 'cancel', name: 'Cancel', key: 'x', cost: 'last in queue', lock: !one.queue.length, tip: 'Cancel the last queued unit for a full refund.' });
     } else {
       for (const [t, d] of Object.entries(p.defs.buildings)) {
         const need = d.req && !s.has(this.me, d.req);
         items.push({ act: 'build:' + t, icon: R.icon(p.faction, t, p.color), name: d.name, key: d.key, cost: costOf(d), lock: need, poor: p.cash < d.cash || p.oil < d.oil, on: this.mode && this.mode.place === t,
           tip: `${d.desc}${need ? `\nRequires ${p.defs.buildings[d.req].name}` : ''}` });
       }
+      if (this.ownUnits().some(u => u.type === 'worker'))
+        items.push({ act: 'repair', name: 'Repair', key: 'e', cost: 'then click', on: this.mode === 'repair', tip: 'Send the selected Workers to repair a damaged building or finish a construction site. Repairs cost a little cash.\nShortcut: right-click the building with Workers selected.' });
       if (this.ownUnits().length) {
         items.push({ act: 'amove', name: 'Attack-Move', key: 'a', cost: 'then click', on: this.mode === 'amove', tip: 'Advance to a point, engaging anything on the way.' });
         items.push({ act: 'stop', name: 'Stop', key: 's', cost: '', tip: 'Halt and hold here.' });
@@ -118,6 +121,7 @@
     } else if (verb === 'cancel') {
       const b = this.single(); if (b) this.cmd({ type: 'cancel', building: b.id });
     } else if (verb === 'amove') { if (this.ownUnits().length) this.mode = 'amove'; }
+    else if (verb === 'repair' || verb === 'rally') this.mode = verb;
     else if (verb === 'stop') this.cmd({ type: 'stop', ids: this.ownUnits().map(u => u.id) });
   };
 
@@ -127,14 +131,18 @@
     if (us.length) {
       const ids = us.map(u => u.id), t = this.pick(x, y);
       if (t && t.owner >= 0 && t.owner !== this.me) { this.cmd({ type: 'attack', ids, target: t.id }); this.rend.ping(t.x, t.y, '#ff5a5a'); if (us.some(u => u.def.dmg)) Snd.ack(this.sim.players[this.me].faction, 'attack'); }
+      else if (t && this.fixable(t) && us.some(u => u.type === 'worker')) { this.cmd({ type: 'repair', ids, target: t.id }); this.rend.ping(t.x, t.y, '#ffd65a'); }
       else if (t && t.kind === 'ore' && us.some(u => u.type === 'worker')) { this.cmd({ type: 'gather', ids, target: t.id }); this.rend.ping(t.x, t.y, '#ffe27a'); }
       else { this.cmd({ type: 'move', ids, x, y }); this.rend.ping(x, y, '#6dff8a'); if (us.some(u => u.def.dmg)) Snd.ack(this.sim.players[this.me].faction, 'move'); }
       Snd.play('click');
-    } else if (one && one.owner === this.me && one.kind === 'building') {
-      const t = this.pick(x, y);
-      this.cmd({ type: 'rally', building: one.id, x, y, node: t && t.kind === 'ore' ? t.id : 0 });
-      this.rend.ping(x, y, '#6dff8a');
-    }
+    } else if (one && one.owner === this.me && one.kind === 'building') this.setRally(one, x, y);
+  };
+  game.fixable = function (t) { return t.kind === 'building' && t.owner === this.me && (!t.built || t.hp < t.maxHp); };
+  game.setRally = function (b, x, y) {
+    if (!Object.values(this.sim.players[this.me].defs.units).some(u => u.from === b.type)) return;
+    const t = this.pick(x, y);
+    this.cmd({ type: 'rally', building: b.id, x, y, node: t && t.kind === 'ore' ? t.id : 0 });
+    this.rend.ping(x, y, '#6dff8a'); Snd.play('click');
   };
 
   // ----- mouse -----
@@ -145,12 +153,19 @@
     if (e.button === 0) {
       if (game.mode && game.mode.place) {
         const gh = game.ghost();
-        game.cmd({ type: 'build', btype: gh.type, tx: gh.tx, ty: gh.ty });
+        game.cmd({ type: 'build', btype: gh.type, tx: gh.tx, ty: gh.ty, ids: game.ownUnits().filter(u => u.type === 'worker').map(u => u.id) });
         if (!gh.ok) game.say(game.sim.canPlace(game.me, gh.type, gh.tx, gh.ty), true);
         else if (!e.shiftKey) game.mode = null;
       } else if (game.mode === 'amove') {
         game.cmd({ type: 'amove', ids: game.ownUnits().map(u => u.id), x: w.x, y: w.y });
         game.rend.ping(w.x, w.y, '#ff9a4a'); game.mode = null; Snd.play('click'); Snd.ack(game.sim.players[game.me].faction, 'attack');
+      } else if (game.mode === 'rally') {
+        const b = game.single(); if (b) game.setRally(b, w.x, w.y);
+        game.mode = null;
+      } else if (game.mode === 'repair') {
+        const t = game.pick(w.x, w.y);
+        if (t && game.fixable(t)) { game.cmd({ type: 'repair', ids: game.ownUnits().map(u => u.id), target: t.id }); game.rend.ping(t.x, t.y, '#ffd65a'); Snd.play('click'); game.mode = null; }
+        else game.say(t && t.kind === 'building' && t.owner === game.me ? 'That building is not damaged' : 'Click one of your damaged buildings', true);
       } else { m.down = true; m.sx = m.x; m.sy = m.y; }
     } else if (e.button === 2) {
       if (game.mode) game.mode = null; else game.smartOrder(w.x, w.y);
@@ -294,9 +309,13 @@
         h = `${ico(one, 'big')}<h3 style="color:${s.players[one.owner].color}">${esc(d.name)}${foe ? ' <em>enemy</em>' : ''}</h3>${hp(one)}`;
         if (one.kind === 'unit') {
           h += `<p>${d.dmg ? `Damage ${d.dmg} (${d.dtype}) · Range ${d.range}` : 'Unarmed'} · Armor ${{ inf: 'infantry', light: 'light', heavy: 'heavy' }[d.armor]}</p>`;
-          if (one.type === 'worker' && !foe) h += `<p class="dim">${one.order.type === 'gather' ? 'Mining ore' : 'Idle — right-click an ore deposit'}</p>`;
-        } else if (!one.built) h += `<p>Under construction — ${Math.floor(one.progress * 100)}%</p>`;
+          if (one.type === 'worker' && !foe) {
+            const job = s.byId.get(one.order.b);
+            h += `<p class="dim">${one.order.type === 'gather' ? 'Mining ore' : one.order.type === 'build' && job ? (job.built ? 'Repairing ' : 'Building ') + esc(job.def.name) : 'Idle — right-click ore to mine, or a damaged building to repair'}</p>`;
+          }
+        } else if (!one.built) h += `<p>Under construction — ${Math.floor(one.progress * 100)}%</p>` + (!foe && one.work < s.tick - 20 ? '<p class="dim">Waiting for a Worker. Right-click here with a Worker selected.</p>' : '');
         else if (!foe) {
+          if (one.hp < one.maxHp) h += '<p class="dim">Damaged — right-click here with Workers to repair.</p>';
           if (d.supply) h += `<p>Provides ${d.supply} food</p>`;
           if (d.oilRate) h += `<p>Pumping ${d.oilRate} oil / sec</p>`;
           if (one.queue.length) {

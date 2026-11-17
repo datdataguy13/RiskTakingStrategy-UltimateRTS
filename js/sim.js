@@ -132,7 +132,7 @@
       const d = this.players[owner].defs.buildings[type];
       const b = { id: this.nextId++, kind: 'building', type, owner, def: d, tx, ty, w: d.w, h: d.h,
         x: tx + d.w / 2, y: ty + d.h / 2, hp: built ? d.hp : d.hp * 0.1, maxHp: d.hp, built: !!built, progress: built ? 1 : 0,
-        queue: [], rally: null, cd: 0, target: 0, facing: 0, seep: 0, dead: false };
+        queue: [], rally: null, cd: 0, target: 0, facing: 0, seep: 0, work: -9, dead: false };
       if (type === 'derrick') {
         const s = this.seepAt(tx, ty);
         if (s) { s.covered = true; b.seep = s.id; }
@@ -325,7 +325,7 @@
     autoGather(u) {
       if (u.type !== 'worker') return;
       const o = this.nearestOre(u.x, u.y, 18);
-      if (o) { u.order = { type: 'gather', node: o.id, phase: 'go', base: 0, t: 0 }; u.path = null; }
+      if (o) { u.order = { type: 'gather', node: o.id, phase: u.carry ? 'back' : 'go', base: 0, t: 0 }; u.path = null; }
     }
     exec(c) {
       const p = this.players[c.player];
@@ -365,9 +365,20 @@
           if (why) return this.msg(c.player, why);
           if (p.cash < d.cash) return this.msg(c.player, 'Not enough cash');
           if (p.oil < (d.oil || 0)) return this.msg(c.player, 'Not enough oil');
+          // a worker has to do the building: the nearest of those sent, else the nearest free one
+          const w = this.builderFor(c.player, this.own(c.ids, c.player), c.tx + d.w / 2, c.ty + d.h / 2);
+          if (!w) return this.msg(c.player, 'You need a Worker to build');
           this.pay(p, d, 1);
           const b = this.addBuilding(c.btype, c.player, c.tx, c.ty, false);
+          if (w.order.type === 'build') w.order.q.push(b.id);        // already on a job: this one is next
+          else { w.order = { type: 'build', b: b.id, q: [] }; w.path = null; w.target = 0; w.repath = 0; }
           this.events.push({ type: 'placed', owner: c.player, x: b.x, y: b.y });
+          break;
+        }
+        case 'repair': {   // finish a construction site or mend a damaged building
+          const b = this.byId.get(c.target);
+          if (!b || b.kind !== 'building' || b.owner !== c.player || (b.built && b.hp >= b.maxHp)) return;
+          for (const u of this.own(c.ids, c.player)) if (u.type === 'worker') { u.order = { type: 'build', b: b.id, q: [] }; u.path = null; u.target = 0; u.repath = 0; }
           break;
         }
         case 'train': {
@@ -399,6 +410,19 @@
           break;
         }
       }
+    }
+    builderFor(pid, sent, x, y) {
+      let best = null, bd = 1e9;
+      // nearest worker, strongly preferring one with no jobs lined up
+      const score = u => Math.hypot(u.x - x, u.y - y) + (u.order.type === 'build' ? 1000 * (1 + u.order.q.length) : 0);
+      for (const u of sent) if (u.type === 'worker') { const d = score(u); if (d < bd) { bd = d; best = u; } }
+      if (best) return best;
+      for (const u of this.ents) {
+        if (u.owner !== pid || u.type !== 'worker' || u.dead) continue;
+        const d = score(u);
+        if (d < bd) { bd = d; best = u; }
+      }
+      return best;
     }
     // '' if the building can be placed, otherwise the reason it cannot
     canPlace(pid, type, tx, ty) {
@@ -443,7 +467,25 @@
           break;
         }
         case 'gather': this.gather(u, o); break;
+        case 'build': this.construct(u, o); break;
       }
+    }
+    // Workers raise construction sites and repair damaged buildings by standing next to them.
+    construct(u, o) {
+      const b = this.byId.get(o.b);
+      if (!b || b.owner !== u.owner || (b.built && b.hp >= b.maxHp)) {
+        if (o.q.length) { o.b = o.q.shift(); u.path = null; u.repath = 0; return; }   // on to the next job
+        this.idle(u); this.autoGather(u); return;
+      }
+      if (this.rectDist(u.x, u.y, b) > 1.05) return this.goRect(u, b);
+      u.path = null; u.facing = Math.atan2(b.y - u.y, b.x - u.x);
+      if (!b.built) { b.work = this.tick; return; }
+      // repair: a full rebuild from nothing would take 1.5x the build time and 35% of the price
+      const p = this.players[u.owner], n = b.def.time * TPS * 1.5, cost = b.def.cash * 0.35 / n;
+      if (p.cash < cost) { this.msg(u.owner, 'Not enough cash to repair'); return this.idle(u); }
+      p.cash -= cost; p.stats.spent += cost;
+      b.hp = Math.min(b.maxHp, b.hp + b.maxHp / n);
+      b.work = this.tick;
     }
     advance(u, o) {
       if (!u.path) {
@@ -607,6 +649,7 @@
     updateBuilding(b) {
       const p = this.players[b.owner], d = b.def;
       if (!b.built) {
+        if (b.work < this.tick - 1) return;      // no worker on site: construction waits
         const n = d.time * TPS;
         b.progress += 1 / n; b.hp = Math.min(b.maxHp, b.hp + b.maxHp * 0.9 / n);
         if (b.progress >= 1) { b.progress = 1; b.built = true; this.dirty = true; this.events.push({ type: 'built', owner: b.owner, name: d.name, x: b.x, y: b.y }); }
