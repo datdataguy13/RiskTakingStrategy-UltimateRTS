@@ -1,4 +1,4 @@
-// Risk Takes Strategy — game server. No dependencies: `node server.js`, then open http://localhost:8080
+// Risk Taking Strategy — game server. No dependencies: `node server.js`, then open http://localhost:8080
 //
 // Does two things:
 //  1. Serves the game files.
@@ -154,7 +154,7 @@ function start(port, quiet, turnMs) {
   server.on('upgrade', accept);
   return new Promise(resolve => server.listen(port, () => {
     if (!quiet) {
-      console.log(`Risk Takes Strategy server running.\n  This computer:   http://localhost:${server.address().port}`);
+      console.log(`Risk Taking Strategy server running.\n  This computer:   http://localhost:${server.address().port}`);
       for (const list of Object.values(require('os').networkInterfaces())) for (const a of list) if (a.family === 'IPv4' && !a.internal) console.log(`  Same network:    http://${a.address}:${server.address().port}`);
       console.log('Open that address in Chrome on both computers. Ctrl+C to stop.');
     }

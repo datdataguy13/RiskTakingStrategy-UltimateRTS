@@ -1,4 +1,4 @@
-# Risk Takes Strategy
+# Risk Taking Strategy
 
 A browser real-time strategy game. Pick a faction, mine ore for cash, pump oil, build farms for food, raise an army and take the map. You get a grade for how efficiently you won.
 
