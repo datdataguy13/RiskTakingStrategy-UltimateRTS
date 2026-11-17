@@ -5,7 +5,7 @@
   R.TILE = 32;        // pixels per tile
   R.TPS = 20;         // simulation ticks per second
   R.START_CASH = 600;
-  R.MAX_FOOD = 100;
+  R.MAX_FOOD = 150;
 
   // damage type -> armor class multiplier
   R.DMG = {
