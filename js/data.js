@@ -183,6 +183,9 @@
   R.RANKS = ['', 'Veteran', 'Elite'];
   R.STRIKE_WARN = 80;   // ticks between a superweapon launch and its first blast
   R.MAX_PLAYERS = 4;
+  // Address of the hosted multiplayer server. The single-player site (GitHub Pages) has no game
+  // server of its own, so its Multiplayer tab links here instead. Leave empty until there is one.
+  R.MULTIPLAYER_URL = '';
   R.COLORS = ['#c779ff', '#ff7bd5', '#9be25a', '#f4f4f4'];   // spare player colors when faction colors run out
   R.HORDE_SIZE = 5;     // comrades needed within HORDE_RANGE tiles for the massed bonus
   R.HORDE_RANGE = 3.5;

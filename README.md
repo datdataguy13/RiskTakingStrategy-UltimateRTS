@@ -6,6 +6,10 @@ No install and no build step. It is plain HTML, CSS and JavaScript.
 
 ## Play
 
+**Play now (single player):** https://datdataguy13.github.io/RiskTakingStrategy-UltimateRTS/
+
+That site is the game against computer players, plus replays. Multiplayer needs the game server, which is hosted separately (see Hosting).
+
 - **vs Computer:** open `index.html` in Chrome. Choose a duel, a 2 v 2 with a computer ally, or a 4-way free-for-all.
 - **Multiplayer on the same network:** run `node server.js` and open the address it prints in Chrome on each computer. One player hosts and gets a 4-letter code; the others join with it. If port 8080 is taken, use `PORT=8081 node server.js`.
 - **Multiplayer over the internet:** put the server on a web host (below) and send your friends the link.
@@ -28,6 +32,7 @@ The server is one Node process with no dependencies. It serves the game and runs
 
 - **Render:** New → Blueprint, pick this repository. `render.yaml` sets everything up on the free plan. A free service sleeps after 15 minutes with nobody connected, so the first visit after a break takes about a minute to load.
 - **Anywhere else:** start command `node server.js`, health check path `/`.
+- **GitHub Pages** serves the same files with no server, so it is single-player only. Set `R.MULTIPLAYER_URL` in `js/data.js` to the hosted server's address and the Pages copy's Multiplayer tab links to it.
 
 Run exactly one instance. Rooms live in that process's memory, so two instances would put the host and the joiner on different servers.
 

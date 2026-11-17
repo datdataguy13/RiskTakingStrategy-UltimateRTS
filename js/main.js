@@ -10,6 +10,9 @@
   let replay = null;       // recording of the match that just ended
   let waitTimer = null;
   const TEAM_COL = ['#6cb6ff', '#ff7b72', '#8fdc6a', '#f0c33c'];
+  // GitHub Pages only serves files: there is no game server behind it, so that copy is single-player
+  // (and replays) and its Multiplayer tab points at the hosted server instead. ?solo=1 previews this locally.
+  const soloSite = /\.github\.io$/i.test(location.hostname) || new URLSearchParams(location.search).has('solo');
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
     set(k, v) { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } }
@@ -64,6 +67,15 @@
     $('best').textContent = match !== 'duel' ? 'Grades are recorded for duels.' : best ? `Best grade on ${difficulty}: ${best}` : `No victory on ${difficulty} yet`;
     if (mode === 'rp') replayList();
     // multiplayer lobby
+    if (soloSite) {
+      for (const id of ['mp-entry', 'mp-room', 'mp-status']) $(id).classList.add('hidden');
+      $('mp-solo').classList.remove('hidden');
+      $('mp-link').classList.toggle('hidden', !R.MULTIPLAYER_URL);
+      $('mp-link').href = R.MULTIPLAYER_URL || '#';
+      $('mp-solo-note').textContent = R.MULTIPLAYER_URL ? 'It opens in a new tab. The first load after a quiet spell can take about a minute.'
+        : 'To play with friends, run "node server.js" from the game folder and open the address it prints.';
+      return;
+    }
     $('mp-entry').classList.toggle('hidden', !!room);
     $('mp-room').classList.toggle('hidden', !room);
     if (room) {
@@ -342,13 +354,13 @@
   let saved = null;
   try { saved = JSON.parse(sessionStorage.getItem('rts-session') || 'null'); } catch (e) { /* storage unavailable */ }
   if (q.get('auto')) begin({ seed: +q.get('seed') || 1234, ff: +q.get('ff') || 0, demo: !!q.get('demo') });
-  else if (q.get('mp')) {
+  else if (q.get('mp') && !soloSite) {
     mode = 'mp'; refresh();
     if (q.get('mp') === 'host') {
       $('mp-host').click();
       if (q.get('autostart')) { const t = setInterval(() => { if (room && room.slots.length >= 2) { clearInterval(t); $('mp-start').click(); } }, 200); }
     } else { $('mp-code').value = q.get('code') || ''; join(); }
-  } else if (saved && saved.code && saved.key) {
+  } else if (saved && saved.code && saved.key && !soloSite) {
     // this tab was in a multiplayer match when the page reloaded: get back in and catch up
     session = saved; mode = 'mp'; refresh();
     connect().then(n => { mpStatus('Rejoining your game…'); n.send({ t: 'rejoin', code: saved.code, key: saved.key, from: 0 }); }).catch(clearSession);
