@@ -37,6 +37,9 @@
       dmg: 75, dtype: 'explosive', range: 10, cd: 3.6, splash: 1.5, sight: 7, time: 22, r: 0.42,
       from: 'factory', req: 'techlab', veh: 1,
       desc: 'Long-range siege gun with splash damage. Needs spotters and escorts.' },
+    transport: { name: 'Transport Helicopter', key: 't', cash: 220, oil: 60, supply: 2, hp: 280, speed: 4.6, armor: 'light',
+      dmg: 0, range: 0, cd: 1, sight: 8, time: 16, r: 0.5, from: 'airfield', veh: 1, air: 1, cap: 8,
+      desc: 'Unarmed airlifter. Carries infantry over any terrain and drops them by parachute.' },
     // --- faction elites ---
     drone: { name: 'Reaper Drone', key: 'u', cash: 320, oil: 120, supply: 3, hp: 240, speed: 4.2, armor: 'light',
       dmg: 34, dtype: 'rocket', range: 6, cd: 1.4, sight: 10, time: 20, r: 0.42,
@@ -49,7 +52,11 @@
     barrage: { name: 'Barrage Truck', key: 'u', cash: 300, oil: 90, supply: 3, hp: 200, speed: 2.4, armor: 'light',
       dmg: 18, dtype: 'explosive', volley: 6, splash: 1.0, range: 9, cd: 5, sight: 7, time: 20, r: 0.42,
       from: 'factory', req: 'techlab', veh: 1, faction: 'vanguard',
-      desc: 'Rocket launcher truck. Rains a six-rocket volley on anything in range.' }
+      desc: 'Rocket launcher truck. Rains a six-rocket volley on anything in range.' },
+    flame: { name: 'Fire Dragon', key: 'u', cash: 300, oil: 110, supply: 3, hp: 480, speed: 2.6, armor: 'heavy',
+      dmg: 20, dtype: 'explosive', splash: 1.2, range: 4, cd: 0.5, sight: 7, time: 20, r: 0.45, look: 'flame',
+      from: 'factory', req: 'techlab', veh: 1, faction: 'dragon',
+      desc: 'Flamethrower tank. Short range, but burns through infantry and buildings in a wide arc.' }
   };
 
   const BUILDINGS = {
@@ -65,6 +72,8 @@
       desc: 'Builds vehicles. Vehicles burn oil.' },
     techlab: { name: 'Tech Lab', key: 't', cash: 300, oil: 100, hp: 600, time: 24, w: 2, h: 2, sight: 6, req: 'factory',
       desc: 'Unlocks artillery and your faction\'s elite unit.' },
+    airfield: { name: 'Airfield', key: 'r', cash: 350, oil: 50, hp: 900, time: 24, w: 4, h: 2, sight: 7, req: 'factory',
+      desc: 'Builds transport aircraft that airlift and paradrop infantry.' },
     turret: { name: 'Gun Turret', key: 'g', cash: 150, oil: 0, hp: 500, time: 12, w: 1, h: 1, sight: 8, req: 'barracks',
       dmg: 18, dtype: 'shell', range: 6.5, cd: 0.7,
       desc: 'Base defense. Engages anything in range, including drones.' }
@@ -81,10 +90,12 @@
       tagline: 'Precision weapons. Advanced tech. Air power.',
       perks: ['+15% weapon range on all units', 'Body armor: units have +5% HP', 'Derricks pump 30% more oil', 'Elite: Reaper Drone flies over any terrain', 'Units cost 10% more'],
       names: { worker: 'Engineer', rifle: 'Marine', rocket: 'Javelin Team', buggy: 'Recon Jeep', tank: 'Liberator MBT', artillery: 'Paladin Howitzer',
+        transport: 'Osprey Tiltrotor', airfield: 'Airbase',
         hq: 'Forward HQ', farm: 'Supply Depot', barracks: 'Barracks', factory: 'Motor Pool', techlab: 'R&D Lab', turret: 'Guard Tower' },
       mod(d) {
         for (const u of Object.values(d.units)) { if (u.range > 1) u.range = +(u.range * 1.15).toFixed(2); u.hp = Math.round(u.hp * 1.05); cost(u, 1.1); }
         d.buildings.derrick.oilRate = +(d.buildings.derrick.oilRate * 1.3).toFixed(2);
+        d.units.transport.speed = 5.4;                       // tiltrotor: the fastest airlift
       }
     },
     bear: {
@@ -93,6 +104,7 @@
       tagline: 'Heavy armor. Big guns. No retreat.',
       perks: ['Vehicles have +25% HP', 'Tanks hit 15% harder', 'Elite: Tsar Tank super-heavy', 'Vehicles move 5% slower'],
       names: { worker: 'Worker', rifle: 'Motor Rifleman', rocket: 'RPG Trooper', buggy: 'BTR Scout', tank: 'Medved Tank', artillery: 'Msta Howitzer',
+        transport: 'Condor Helicopter', airfield: 'Aerodrome',
         hq: 'Federal Command', farm: 'Kolkhoz', barracks: 'Barracks', factory: 'Tank Works', techlab: 'Institute', turret: 'Bunker Gun' },
       mod(d) {
         for (const u of Object.values(d.units)) if (u.veh) { u.hp = Math.round(u.hp * 1.25); u.speed = +(u.speed * 0.95).toFixed(2); }
@@ -105,15 +117,33 @@
       tagline: 'Cheap. Fast. Endless.',
       perks: ['Units cost 20% less and train 30% faster', 'Conscripts are trained two at a time', 'Elite: Barrage Truck rocket volleys', 'Units have 15% less HP'],
       names: { worker: 'Laborer', rifle: 'Conscripts', rocket: 'RPG Team', buggy: 'Technical', tank: 'Chonma Tank', artillery: 'Koksan Gun',
+        transport: 'Colt Biplane', airfield: 'Airstrip',
         hq: 'Party Headquarters', farm: 'Collective Farm', barracks: 'Conscription Office', factory: 'Tractor Plant', techlab: 'Rocket Institute', turret: 'Gun Nest' },
       descs: { rifle: 'Two cheap conscripts per order. Strength in numbers.' },
       mod(d) {
         for (const u of Object.values(d.units)) { cost(u, 0.8); u.time = +(u.time * 0.7).toFixed(1); u.hp = Math.round(u.hp * 0.85); }
         const c = d.units.rifle; c.count = 2; c.cash = round5(c.cash * 1.5);
+        d.units.transport.cap = 6; d.units.transport.speed = 3.8;   // old biplane: cheap, slow, small
       }
     }
   };
-  R.FACTION_ORDER = ['liberty', 'bear', 'vanguard'];
+  R.FACTIONS.dragon = {
+    name: 'Jade Dragon Republic', short: 'Jade Dragon', color: '#2fc48d', alt: '#f2d14a', hull: '#6c7f78', emblem: 'goldstar', unique: 'flame',
+    voice: { pitch: 0.85, rate: 1.2, select: ['Reporting.', 'The Republic is ready.', 'Your orders?', 'Standing in formation.'], move: ['Advancing.', 'In formation.', 'Understood.', 'Moving as one.'], attack: ['Strength in numbers.', 'Burn them out.', 'All units, fire.', 'For the Republic.'] },
+    tagline: 'Industry. Numbers. Fight as one.',
+    perks: ['Buildings cost 25% less and go up 40% faster', 'Massed: units deal +25% damage with 5 or more comrades nearby', 'Elite: Fire Dragon flamethrower tank', 'Vehicles burn 15% more oil'],
+    names: { worker: 'Construction Crew', rifle: 'Guardsman', rocket: 'Red Arrow Team', buggy: 'Lynx Scout', tank: 'Tiger Tank', artillery: 'Thunder Gun',
+      transport: 'Crane Airlifter', airfield: 'Air Corps Field',
+      hq: 'Central Command', farm: 'Granary', barracks: 'Garrison', factory: 'Heavy Industry Plant', techlab: 'Weapons Bureau', turret: 'Sentry Gun' },
+    mod(d) {
+      for (const b of Object.values(d.buildings)) { cost(b, 0.75); b.time = +(b.time * 0.6).toFixed(1); }
+      for (const u of Object.values(d.units)) { if (u.veh) u.oil = round5(u.oil * 1.15); if (u.dmg) u.horde = 1.25; }
+      d.units.transport.cap = 12;                            // heavy airlifter: moves a whole platoon
+    }
+  };
+  R.HORDE_SIZE = 5;     // comrades needed within HORDE_RANGE tiles for the massed bonus
+  R.HORDE_RANGE = 3.5;
+  R.FACTION_ORDER = ['liberty', 'bear', 'vanguard', 'dragon'];
 
   // Map themes. water/trees/rock steer terrain generation; the renderer owns the look.
   R.THEMES = {

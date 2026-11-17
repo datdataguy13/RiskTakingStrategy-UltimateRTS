@@ -101,6 +101,8 @@
       }
       if (this.ownUnits().some(u => u.type === 'worker'))
         items.push({ act: 'repair', name: 'Repair', key: 'e', cost: 'then click', on: this.mode === 'repair', tip: 'Send the selected Workers to repair a damaged building or finish a construction site. Repairs cost a little cash.\nShortcut: right-click the building with Workers selected.' });
+      if (this.ownUnits().some(u => u.cargo && u.cargo.length))
+        items.push({ act: 'drop', name: 'Paradrop', key: 'u', cost: 'then click', on: this.mode === 'drop', tip: 'The selected transports fly to the point you click and parachute their troops there.\nClick right under a transport to unload on the spot.' });
       if (this.ownUnits().length) {
         items.push({ act: 'amove', name: 'Attack-Move', key: 'a', cost: 'then click', on: this.mode === 'amove', tip: 'Advance to a point, engaging anything on the way.' });
         items.push({ act: 'stop', name: 'Stop', key: 's', cost: '', tip: 'Halt and hold here.' });
@@ -121,7 +123,7 @@
     } else if (verb === 'cancel') {
       const b = this.single(); if (b) this.cmd({ type: 'cancel', building: b.id });
     } else if (verb === 'amove') { if (this.ownUnits().length) this.mode = 'amove'; }
-    else if (verb === 'repair' || verb === 'rally') this.mode = verb;
+    else if (verb === 'repair' || verb === 'rally' || verb === 'drop') this.mode = verb;
     else if (verb === 'stop') this.cmd({ type: 'stop', ids: this.ownUnits().map(u => u.id) });
   };
 
@@ -131,6 +133,10 @@
     if (us.length) {
       const ids = us.map(u => u.id), t = this.pick(x, y);
       if (t && t.owner >= 0 && t.owner !== this.me) { this.cmd({ type: 'attack', ids, target: t.id }); this.rend.ping(t.x, t.y, '#ff5a5a'); if (us.some(u => u.def.dmg)) Snd.ack(this.sim.players[this.me].faction, 'attack'); }
+      else if (t && t.owner === this.me && t.cargo && us.some(u => u.def.armor === 'inf')) {
+        if (t.cargo.length >= t.def.cap) this.say('That transport is full', true);
+        else { this.cmd({ type: 'load', ids, target: t.id }); this.rend.ping(t.x, t.y, '#7fd0ff'); }
+      }
       else if (t && this.fixable(t) && us.some(u => u.type === 'worker')) { this.cmd({ type: 'repair', ids, target: t.id }); this.rend.ping(t.x, t.y, '#ffd65a'); }
       else if (t && t.kind === 'ore' && us.some(u => u.type === 'worker')) { this.cmd({ type: 'gather', ids, target: t.id }); this.rend.ping(t.x, t.y, '#ffe27a'); }
       else { this.cmd({ type: 'move', ids, x, y }); this.rend.ping(x, y, '#6dff8a'); if (us.some(u => u.def.dmg)) Snd.ack(this.sim.players[this.me].faction, 'move'); }
@@ -159,6 +165,9 @@
       } else if (game.mode === 'amove') {
         game.cmd({ type: 'amove', ids: game.ownUnits().map(u => u.id), x: w.x, y: w.y });
         game.rend.ping(w.x, w.y, '#ff9a4a'); game.mode = null; Snd.play('click'); Snd.ack(game.sim.players[game.me].faction, 'attack');
+      } else if (game.mode === 'drop') {
+        game.cmd({ type: 'drop', ids: game.ownUnits().map(u => u.id), x: w.x, y: w.y });
+        game.rend.ping(w.x, w.y, '#7fd0ff'); game.mode = null; Snd.play('click'); Snd.ack(game.sim.players[game.me].faction, 'move');
       } else if (game.mode === 'rally') {
         const b = game.single(); if (b) game.setRally(b, w.x, w.y);
         game.mode = null;
@@ -309,6 +318,11 @@
         h = `${ico(one, 'big')}<h3 style="color:${s.players[one.owner].color}">${esc(d.name)}${foe ? ' <em>enemy</em>' : ''}</h3>${hp(one)}`;
         if (one.kind === 'unit') {
           h += `<p>${d.dmg ? `Damage ${d.dmg} (${d.dtype}) · Range ${d.range}` : 'Unarmed'} · Armor ${{ inf: 'infantry', light: 'light', heavy: 'heavy' }[d.armor]}</p>`;
+          if (one.cargo && !foe) {
+            const c = {}; for (const v of one.cargo) c[v.type] = (c[v.type] || 0) + 1;
+            h += `<p>Carrying ${one.cargo.length} / ${d.cap} infantry</p><p class="queue">${Object.entries(c).map(([t, k]) => `<span><img src="${R.icon(p.faction, t, p.color)}" alt="">${esc(p.defs.units[t].name)} ×${k}</span>`).join('')}</p>`;
+            h += `<p class="dim">${one.cargo.length ? 'U, then click: parachute the troops there.' : 'Select infantry and right-click this aircraft to board.'}</p>`;
+          }
           if (one.type === 'worker' && !foe) {
             const job = s.byId.get(one.order.b);
             h += `<p class="dim">${one.order.type === 'gather' ? 'Mining ore' : one.order.type === 'build' && job ? (job.built ? 'Repairing ' : 'Building ') + esc(job.def.name) : 'Idle — right-click ore to mine, or a damaged building to repair'}</p>`;
@@ -341,6 +355,7 @@
       if (ev.type === 'msg') { if (ev.player === game.me) { game.say(ev.text, true); if (/cash|oil/.test(ev.text)) Snd.say('Insufficient funds.', 'eva'); } }
       else if (ev.type === 'placed') { if (ev.owner === game.me) Snd.play('place'); }
       else if (ev.type === 'built') { if (ev.owner === game.me) { game.say(ev.name + ' complete'); Snd.play('done'); Snd.say('Construction complete.', 'eva'); } }
+      else if (ev.type === 'jump') { /* drawn from unit state */ }
       else if (ev.type === 'trained') { if (ev.owner === game.me) { Snd.play('unit'); Snd.say('Unit ready.', 'eva'); } }
       else game.rend.onEvent(ev);
     }

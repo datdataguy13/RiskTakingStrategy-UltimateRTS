@@ -124,7 +124,7 @@
     addUnit(type, owner, x, y) {
       const d = this.players[owner].defs.units[type];
       const u = { id: this.nextId++, kind: 'unit', type, owner, def: d, x, y, px: x, py: y, hp: d.hp, maxHp: d.hp,
-        facing: owner ? Math.PI : 0, order: { type: 'idle' }, path: null, pi: 0, target: 0, cd: 0, carry: 0, repath: 0, dead: false };
+        facing: owner ? Math.PI : 0, order: { type: 'idle' }, path: null, pi: 0, target: 0, cd: 0, carry: 0, repath: 0, chute: 0, cargo: d.cap ? [] : null, dead: false };
       this.ents.push(u); this.byId.set(u.id, u); this.dirty = true;
       return u;
     }
@@ -375,6 +375,18 @@
           this.events.push({ type: 'placed', owner: c.player, x: b.x, y: b.y });
           break;
         }
+        case 'load': {     // infantry board a transport
+          const t = this.byId.get(c.target);
+          if (!t || t.owner !== c.player || !t.cargo) return;
+          for (const u of this.own(c.ids, c.player)) if (u.def.armor === 'inf' && u !== t) { u.order = { type: 'board', t: t.id }; u.path = null; u.target = 0; u.repath = 0; }
+          break;
+        }
+        case 'drop': {     // transports fly to a point and parachute their passengers
+          if (!(fin(c.x) && fin(c.y))) return;
+          const x = Math.min(this.W - 0.01, Math.max(0, c.x)), y = Math.min(this.H - 0.01, Math.max(0, c.y));
+          for (const u of this.own(c.ids, c.player)) if (u.cargo && u.cargo.length) { u.order = { type: 'drop', x, y, n: 0 }; u.path = null; }
+          break;
+        }
         case 'repair': {   // finish a construction site or mend a damaged building
           const b = this.byId.get(c.target);
           if (!b || b.kind !== 'building' || b.owner !== c.player || (b.built && b.hp >= b.maxHp)) return;
@@ -455,6 +467,12 @@
     updateUnit(u) {
       u.px = u.x; u.py = u.y;
       if (u.cd > 0) u.cd--;
+      if (u.chute > 0) { u.chute--; return; }                  // still under the parachute
+      if (u.def.horde && (this.tick + u.id) % 20 === 0) {      // massed bonus: recount nearby comrades once a second
+        let n = 0;
+        for (const e of this.ents) if (e.owner === u.owner && e.kind === 'unit' && e !== u && !e.dead && e.def.dmg && Math.abs(e.x - u.x) <= R.HORDE_RANGE && Math.abs(e.y - u.y) <= R.HORDE_RANGE) n++;
+        u.massed = n >= R.HORDE_SIZE;
+      }
       if (!u.def.air && this.block[(u.y | 0) * this.W + (u.x | 0)]) { const f = this.nearestFree(u.x, u.y); u.x = f.x; u.y = f.y; u.path = null; }
       const o = u.order;
       switch (o.type) {
@@ -468,6 +486,34 @@
         }
         case 'gather': this.gather(u, o); break;
         case 'build': this.construct(u, o); break;
+        case 'board': {
+          const t = this.byId.get(o.t);
+          if (!t || t.cargo.length >= t.def.cap) { this.idle(u); break; }
+          if (Math.hypot(t.x - u.x, t.y - u.y) <= 1.3) {         // climb aboard: leave the map until dropped
+            u.dead = true; this.byId.delete(u.id); this.anyDead = true; u.path = null; u.order = { type: 'idle' }; u.target = 0;
+            u.bt = this.tick; t.cargo.push(u); this.dirty = true;
+            break;
+          }
+          if (!u.path || this.tick >= u.repath) { this.pathTo(u, { x0: t.x, y0: t.y, x1: t.x, y1: t.y }, 0.9); u.repath = this.tick + 15 + (u.id % 5); }
+          if (this.follow(u)) u.path = null;
+          break;
+        }
+        case 'drop': {
+          if (Math.hypot(o.x - u.x, o.y - u.y) > 0.3) {
+            if (!u.path) this.pathTo(u, { x0: o.x, y0: o.y, x1: o.x, y1: o.y }, 0, true);
+            this.follow(u);
+            break;
+          }
+          if (!u.cargo.length) { this.idle(u); break; }
+          if (this.tick % 4 === 0 && u.cargo[0].bt < this.tick) {   // one jumper every few ticks, fanned out around the drop point
+            const k = o.n++, a = k * 2.4, d = 0.7 * Math.sqrt(k), f = this.nearestFree(o.x + Math.cos(a) * d, o.y + Math.sin(a) * d);
+            const v = u.cargo.shift();
+            v.dead = false; v.x = v.px = f.x; v.y = v.py = f.y; v.chute = 40; v.order = { type: 'idle' }; v.path = null; v.target = 0;
+            this.ents.push(v); this.byId.set(v.id, v); this.dirty = true;
+            this.events.push({ type: 'jump', owner: u.owner, x: f.x, y: f.y });
+          }
+          break;
+        }
       }
     }
     // Workers raise construction sites and repair damaged buildings by standing next to them.
@@ -582,9 +628,10 @@
       const d = src.def;
       src.cd = Math.round(d.cd * TPS);
       src.facing = Math.atan2(t.y - src.y, t.x - src.x);
+      const dmg = src.massed ? d.dmg * d.horde : d.dmg;
       if (d.dtype === 'bullet' || d.dtype === 'beam') {
         this.events.push({ type: d.dtype, x: src.x, y: src.y, tx: t.x, ty: t.y });
-        this.hit(t, d.dmg, d.dtype, src.owner, src);
+        this.hit(t, dmg, d.dtype, src.owner, src);
       } else {
         const n = d.volley || 1;
         for (let k = 0; k < n; k++) {
@@ -592,10 +639,10 @@
           const a = (k * 2.39996 + src.id) % 6.2832, rr = n > 1 ? 0.35 + 0.25 * (k % 3) : 0;
           const ox = Math.cos(a) * rr, oy = Math.sin(a) * rr;
           this.proj.push({ x: src.x, y: src.y, px: src.x, py: src.y, tx: t.x + ox, ty: t.y + oy, ox, oy, target: t.id, dtype: d.dtype,
-            look: n > 1 || d.dtype === 'rocket' ? 'rocket' : d.dtype, delay: k * 3,
-            speed: d.dtype === 'shell' ? 14 : n > 1 ? 11 : 9, dmg: d.dmg, splash: d.splash || 0, owner: src.owner, src: src.id });
+            look: d.look || (n > 1 || d.dtype === 'rocket' ? 'rocket' : d.dtype), delay: k * 3,
+            speed: d.dtype === 'shell' ? 14 : n > 1 ? 11 : 9, dmg, splash: d.splash || 0, owner: src.owner, src: src.id });
         }
-        this.events.push({ type: 'fire', x: src.x, y: src.y, dtype: d.dtype });
+        this.events.push({ type: 'fire', x: src.x, y: src.y, dtype: d.dtype, look: d.look });
       }
     }
     hit(t, dmg, dtype, owner, src) {
@@ -617,6 +664,7 @@
         const kp = this.players[killer];
         kp.stats.killValue += val; if (isU) kp.stats.unitsKilled++; else kp.stats.bldKilled++;
       }
+      if (t.cargo) for (const v of t.cargo) { vp.stats.unitsLost++; vp.stats.lostValue += v.def.cash + (v.def.oil || 0); }
       if (!isU) {
         this.setBlock(t.tx, t.ty, t.w, t.h, 0);
         const s = this.byId.get(t.seep); if (s) s.covered = false;
@@ -640,7 +688,7 @@
             if (dd <= pr.splash) this.hit(e, pr.dmg * (1 - 0.5 * dd / pr.splash), pr.dtype, pr.owner, src);
           }
         } else if (t) this.hit(t, pr.dmg, pr.dtype, pr.owner, src);
-        this.events.push({ type: 'boom', x: pr.tx, y: pr.ty, size: pr.splash ? pr.splash : 0.35 });
+        this.events.push({ type: 'boom', x: pr.tx, y: pr.ty, size: pr.splash ? pr.splash : 0.35, look: pr.look });
       }
       this.proj = keep;
     }
@@ -742,7 +790,7 @@
       for (const e of this.ents) {
         if (e.owner < 0 || e.dead) continue;
         const p = this.players[e.owner];
-        if (e.kind === 'unit') p.used += e.def.supply;
+        if (e.kind === 'unit') { p.used += e.def.supply; if (e.cargo) for (const v of e.cargo) p.used += v.def.supply; }
         else {
           p.nb++;
           if (e.built) p.cap += e.def.supply || 0;
@@ -761,6 +809,7 @@
         h = (Math.imul(h, 31) + Math.round(e.x * 1000)) | 0;
         h = (Math.imul(h, 31) + Math.round(e.y * 1000)) | 0;
         h = (Math.imul(h, 31) + Math.round((e.hp || e.amount || 0) * 10)) | 0;
+        if (e.cargo) h = (Math.imul(h, 31) + e.cargo.length) | 0;
       }
       for (const p of this.players) h = (Math.imul(h, 31) + Math.round(p.cash * 10) + Math.round(p.oil * 10)) | 0;
       return h >>> 0;

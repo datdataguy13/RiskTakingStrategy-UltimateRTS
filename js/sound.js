@@ -42,6 +42,7 @@
         case 'shot': this.noise(0.07, 0.22, 'bandpass', 2400, 900, 0, 1.2); this.tone(260, 90, 0.05, 'square', 0.05); break;
         case 'cannon': this.noise(0.28, 0.5, 'lowpass', 1400, 140); this.tone(130, 38, 0.28, 'sine', 0.55); break;
         case 'rocket': this.noise(0.5, 0.2, 'bandpass', 500, 2600, 0, 1.5); this.tone(180, 420, 0.3, 'sawtooth', 0.03); break;
+        case 'flame': this.noise(0.45, 0.16, 'bandpass', 900, 350, 0, 0.7); break;
         case 'arty': this.noise(0.55, 0.6, 'lowpass', 700, 70); this.tone(85, 28, 0.55, 'sine', 0.7); this.noise(0.12, 0.2, 'highpass', 3000, 1500); break;
         case 'boom': this.noise(0.6, 0.5, 'lowpass', 1600, 60); this.tone(100, 30, 0.5, 'sine', 0.5); break;
         case 'bigboom': this.noise(1.2, 0.7, 'lowpass', 2200, 45); this.tone(75, 24, 1.0, 'sine', 0.8); this.noise(0.5, 0.25, 'bandpass', 900, 200, 0.12); break;

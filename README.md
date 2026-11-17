@@ -16,6 +16,7 @@ No install and no build step. It is plain HTML, CSS and JavaScript.
 | Liberty Coalition | Modern army: longer range, tougher units, drones, better oil. Units cost more. |
 | Iron Bear | Heavy armor: tougher, harder-hitting vehicles and the Juggernaut. Vehicles are slower. |
 | People's Vanguard | Cheap, fast to build, rifles train in pairs, Barrage rocket artillery. Units are fragile. |
+| Jade Dragon Republic | Industry and numbers: buildings are cheap and go up fast, massed infantry and tanks hit harder, Fire Dragon flamethrower tank. Vehicles burn more oil. |
 
 ## Controls
 
@@ -27,6 +28,7 @@ No install and no build step. It is plain HTML, CSS and JavaScript.
 | Build | pick a structure, click the map; a Worker walks over and builds it |
 | Repair | right-click a damaged building with Workers selected (or `E`, then click) |
 | Rally point | select a production building and right-click the map (or `L`, then click) |
+| Airlift | build an Airfield and a transport; right-click the transport with infantry selected to board; `U`, then click to paradrop them |
 | Camera | arrow keys, screen edges, minimap |
 | Control groups | `Ctrl+1–9` to save, `1–9` to recall |
 | Sound | `M` cycles all / effects only / off |
